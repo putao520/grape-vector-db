@@ -1,48 +1,271 @@
-use crate::{types::*, config::VectorDbConfig, storage::VectorStore, errors::Result};
+use crate::{
+    types::*, 
+    config::VectorDbConfig, 
+    storage::VectorStore, 
+    index::{HnswIndex, SearchResult as IndexSearchResult},
+    metrics::{MetricsCollector, QueryTimer},
+    errors::{Result, VectorDbError}
+};
+use std::sync::Arc;
+use parking_lot::RwLock;
+use std::collections::HashMap;
 
 /// 查询引擎
 pub struct QueryEngine {
-    _config: VectorDbConfig,
+    config: VectorDbConfig,
+    hnsw_index: Arc<HnswIndex>,
+    metrics: Arc<MetricsCollector>,
 }
 
 impl QueryEngine {
-    pub fn new(config: &VectorDbConfig) -> Self {
-        Self {
-            _config: config.clone(),
-        }
+    pub fn new(config: &VectorDbConfig, metrics: Arc<MetricsCollector>) -> Result<Self> {
+        // 创建HNSW索引
+        let hnsw_index = Arc::new(HnswIndex::new(
+            config.index.hnsw.clone(),
+            config.vector_dimension,
+        ));
+
+        Ok(Self {
+            config: config.clone(),
+            hnsw_index,
+            metrics,
+        })
     }
 
+    /// 添加文档到索引
+    pub async fn add_document(&self, record: &DocumentRecord) -> Result<()> {
+        let _timer = QueryTimer::new(self.metrics.clone());
+
+        // 添加到向量索引
+        let vector_point = crate::types::VectorPoint {
+            vector: record.embedding.clone(),
+            document_id: record.id.clone(),
+        };
+        self.hnsw_index.add_point(vector_point)?;
+
+        Ok(())
+    }
+
+    /// 删除文档
+    pub async fn remove_document(&self, document_id: &str) -> Result<bool> {
+        let _timer = QueryTimer::new(self.metrics.clone());
+
+        // 从向量索引删除
+        let removed_from_vector = self.hnsw_index.remove_point(document_id)?;
+
+        Ok(removed_from_vector)
+    }
+
+    /// 混合搜索：向量相似度 + 简单文本搜索
     pub async fn search<S: VectorStore + ?Sized>(
         &self,
         store: &S,
-        _query_vector: &[f32],
-        query_text: &str,
+        query_vector: Option<&[f32]>,
+        query_text: Option<&str>,
         limit: usize,
+        vector_weight: f32,
+        text_weight: f32,
     ) -> Result<Vec<SearchResult>> {
-        // 简化实现：获取相似文档ID并构造搜索结果
-        let doc_ids = store.search_similar(_query_vector, limit).await?;
-        let mut results = Vec::new();
+        let _timer = QueryTimer::new(self.metrics.clone());
 
-        for doc_id in doc_ids {
+        let mut vector_results = HashMap::new();
+        let mut text_results = HashMap::new();
+
+        // 向量搜索
+        if let Some(vector) = query_vector {
+            let results = self.hnsw_index.search(vector, limit * 2)?;
+            for (i, result) in results.iter().enumerate() {
+                let score = result.similarity * vector_weight * (1.0 - i as f32 / results.len() as f32);
+                vector_results.insert(result.document_id.clone(), score);
+            }
+        }
+
+        // 简单文本搜索
+        if let Some(text) = query_text {
+            let text_lower = text.to_lowercase();
+            let docs = store.list_documents(0, 1000).await?; // 简化实现：获取所有文档
+            
+            for (i, doc) in docs.iter().enumerate() {
+                let content_lower = doc.content.to_lowercase();
+                let title_lower = doc.title.to_lowercase();
+                
+                // 简单的文本匹配评分
+                let mut score = 0.0;
+                if title_lower.contains(&text_lower) {
+                    score += 2.0; // 标题匹配权重更高
+                }
+                if content_lower.contains(&text_lower) {
+                    score += 1.0;
+                }
+                
+                if score > 0.0 {
+                    let weighted_score = score * text_weight * (1.0 - i as f32 / docs.len() as f32);
+                    text_results.insert(doc.id.clone(), weighted_score);
+                }
+            }
+        }
+
+        // 合并结果
+        let mut combined_scores = HashMap::new();
+        
+        // 添加向量搜索结果
+        for (doc_id, score) in vector_results {
+            combined_scores.insert(doc_id, score);
+        }
+        
+        // 添加或合并文本搜索结果
+        for (doc_id, score) in text_results {
+            *combined_scores.entry(doc_id).or_insert(0.0) += score;
+        }
+
+        // 按分数排序并获取文档详情
+        let mut sorted_results: Vec<_> = combined_scores.into_iter().collect();
+        sorted_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut final_results = Vec::new();
+        for (doc_id, score) in sorted_results.into_iter().take(limit) {
             if let Some(doc) = store.get_document(&doc_id).await? {
                 let result = SearchResult {
                     document_id: doc.id.clone(),
                     title: doc.title.clone(),
-                    content_snippet: doc.content.chars().take(200).collect(),
-                    similarity_score: 0.8, // 模拟相似度分数
+                    content_snippet: self.extract_snippet(&doc.content, query_text),
+                    similarity_score: score,
                     package_name: doc.package_name.clone(),
                     doc_type: doc.doc_type.clone(),
                     metadata: doc.metadata.clone(),
                 };
-                results.push(result);
+                final_results.push(result);
             }
         }
 
-        // 简单的文本匹配过滤
-        if !query_text.is_empty() {
-            results.retain(|r| r.content_snippet.to_lowercase().contains(&query_text.to_lowercase()));
-        }
+        Ok(final_results)
+    }
 
-        Ok(results)
+    /// 纯向量搜索
+    pub async fn vector_search<S: VectorStore + ?Sized>(
+        &self,
+        store: &S,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.search(store, Some(query_vector), None, limit, 1.0, 0.0).await
+    }
+
+    /// 纯文本搜索
+    pub async fn text_search<S: VectorStore + ?Sized>(
+        &self,
+        store: &S,
+        query_text: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.search(store, None, Some(query_text), limit, 0.0, 1.0).await
+    }
+
+    /// 提取内容摘要
+    fn extract_snippet(&self, content: &str, query_text: Option<&str>) -> String {
+        let max_length = 200;
+        
+        if let Some(query) = query_text {
+            // 尝试找到包含查询词的片段
+            let query_lower = query.to_lowercase();
+            let content_lower = content.to_lowercase();
+            
+            if let Some(pos) = content_lower.find(&query_lower) {
+                let start = pos.saturating_sub(50);
+                let end = (pos + query.len() + 150).min(content.len());
+                let snippet = &content[start..end];
+                
+                if snippet.len() > max_length {
+                    format!("...{}", &snippet[..max_length])
+                } else if start > 0 {
+                    format!("...{}", snippet)
+                } else {
+                    snippet.to_string()
+                }
+            } else {
+                // 如果没找到查询词，返回开头
+                content.chars().take(max_length).collect()
+            }
+        } else {
+            // 没有查询文本，返回开头
+            content.chars().take(max_length).collect()
+        }
+    }
+
+    /// 重建索引
+    pub async fn rebuild_index(&self) -> Result<()> {
+        let start_time = std::time::Instant::now();
+        
+        // 重建向量索引
+        self.hnsw_index.build_index()?;
+        
+        let elapsed = start_time.elapsed();
+        self.metrics.record_index_build_time(elapsed.as_secs_f64() * 1000.0);
+        
+        Ok(())
+    }
+
+    /// 获取索引统计信息
+    pub fn get_index_stats(&self) -> IndexStats {
+        self.hnsw_index.stats()
+    }
+
+    /// 保存索引到文件
+    pub async fn save_index(&self, path: &std::path::Path) -> Result<()> {
+        self.hnsw_index.save_to_file(path).await
+    }
+
+    /// 从文件加载索引
+    pub async fn load_index(&self, path: &std::path::Path) -> Result<()> {
+        self.hnsw_index.load_from_file(path).await
+    }
+}
+
+/// 索引统计信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IndexStats {
+    pub point_count: usize,
+    pub dimension: usize,
+    pub is_built: bool,
+    pub memory_usage_mb: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::BasicVectorStore;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_query_engine() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = VectorDbConfig::default();
+        let metrics = Arc::new(MetricsCollector::new());
+        
+        let engine = QueryEngine::new(&config, metrics).unwrap();
+        let mut store = BasicVectorStore::new(temp_dir.path().to_path_buf(), &config).await.unwrap();
+
+        // 添加测试文档
+        let doc = DocumentRecord {
+            id: "test1".to_string(),
+            title: "测试文档".to_string(),
+            content: "这是一个测试文档的内容".to_string(),
+            embedding: vec![1.0, 0.0, 0.0],
+            package_name: Some("test_package".to_string()),
+            doc_type: Some("test".to_string()),
+            metadata: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        store.add_document(doc.clone()).await.unwrap();
+        engine.add_document(&doc).await.unwrap();
+        engine.rebuild_index().await.unwrap();
+
+        // 测试向量搜索
+        let results = engine.vector_search(&store, &[1.0, 0.1, 0.0], 5).await.unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].document_id, "test1");
     }
 } 
