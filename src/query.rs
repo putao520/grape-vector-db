@@ -21,7 +21,7 @@ impl QueryEngine {
     pub fn new(config: &VectorDbConfig, metrics: Arc<MetricsCollector>) -> Result<Self> {
         // 创建HNSW索引
         let hnsw_index = Arc::new(HnswIndex::new(
-            config.index.hnsw.clone(),
+            config.hnsw.clone(),
             config.vector_dimension,
         ));
 
@@ -133,6 +133,7 @@ impl QueryEngine {
                     package_name: doc.package_name.clone(),
                     doc_type: doc.doc_type.clone(),
                     metadata: doc.metadata.clone(),
+                    score_breakdown: None, // 简单搜索不需要分数分解
                 };
                 final_results.push(result);
             }
@@ -171,16 +172,32 @@ impl QueryEngine {
             let content_lower = content.to_lowercase();
             
             if let Some(pos) = content_lower.find(&query_lower) {
-                let start = pos.saturating_sub(50);
-                let end = (pos + query.len() + 150).min(content.len());
-                let snippet = &content[start..end];
+                // 使用字符索引而不是字节索引来避免UTF-8边界问题
+                let chars: Vec<char> = content.chars().collect();
+                let content_lower_chars: Vec<char> = content_lower.chars().collect();
                 
-                if snippet.len() > max_length {
-                    format!("...{}", &snippet[..max_length])
-                } else if start > 0 {
+                // 找到查询词在字符数组中的位置
+                let mut char_pos = 0;
+                for (i, window) in content_lower_chars.windows(query.chars().count()).enumerate() {
+                    let window_str: String = window.iter().collect();
+                    if window_str == query_lower {
+                        char_pos = i;
+                        break;
+                    }
+                }
+                
+                let start_char = char_pos.saturating_sub(50);
+                let end_char = (char_pos + query.chars().count() + 150).min(chars.len());
+                
+                let snippet: String = chars[start_char..end_char].iter().collect();
+                
+                if snippet.chars().count() > max_length {
+                    let truncated: String = snippet.chars().take(max_length).collect();
+                    format!("...{}", truncated)
+                } else if start_char > 0 {
                     format!("...{}", snippet)
                 } else {
-                    snippet.to_string()
+                    snippet
                 }
             } else {
                 // 如果没找到查询词，返回开头
@@ -207,7 +224,13 @@ impl QueryEngine {
 
     /// 获取索引统计信息
     pub fn get_index_stats(&self) -> IndexStats {
-        self.hnsw_index.stats()
+        let hnsw_stats = self.hnsw_index.stats();
+        IndexStats {
+            point_count: hnsw_stats.point_count,
+            dimension: hnsw_stats.dimension,
+            is_built: hnsw_stats.is_built,
+            memory_usage_mb: hnsw_stats.memory_usage_mb,
+        }
     }
 
     /// 保存索引到文件
@@ -252,11 +275,12 @@ mod tests {
             title: "测试文档".to_string(),
             content: "这是一个测试文档的内容".to_string(),
             embedding: vec![1.0, 0.0, 0.0],
-            package_name: Some("test_package".to_string()),
-            doc_type: Some("test".to_string()),
+            package_name: "test_package".to_string(),
+            doc_type: "test".to_string(),
             metadata: std::collections::HashMap::new(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            language: "zh".to_string(),
+            version: "1".to_string(),
+            sparse_representation: None,
         };
 
         store.add_document(doc.clone()).await.unwrap();

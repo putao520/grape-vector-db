@@ -1,414 +1,511 @@
-use crate::{types::*, config::VectorDbConfig, errors::{Result, VectorDbError}};
-use std::path::PathBuf;
+use crate::types::{Document, DocumentRecord, SearchResult, VectorDbError, VectorDbStats};
 use async_trait::async_trait;
-use sled::{Db, Tree};
-use bincode;
-use tokio::task;
-use std::sync::Arc;
-use parking_lot::RwLock;
-use moka::future::Cache;
-use std::time::Duration;
+use sled::Db;
+use std::collections::HashMap;
+use std::path::Path;
 
-/// 向量存储trait
+/// 向量存储特征
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    async fn add_document(&mut self, record: DocumentRecord) -> Result<()>;
-    async fn get_document(&self, id: &str) -> Result<Option<DocumentRecord>>;
-    async fn search_similar(&self, query_vector: &[f32], limit: usize) -> Result<Vec<String>>;
-    async fn delete_document(&mut self, id: &str) -> Result<bool>;
-    async fn update_document(&mut self, record: DocumentRecord) -> Result<()>;
-    async fn list_documents(&self, offset: usize, limit: usize) -> Result<Vec<DocumentRecord>>;
-    async fn save(&self) -> Result<()>;
-    async fn load(&mut self) -> Result<()>;
-    async fn compact(&self) -> Result<()>;
-    fn stats(&self) -> DatabaseStats;
+    /// 插入文档
+    async fn insert_document(&mut self, document: Document) -> Result<String, VectorDbError>;
+    
+    /// 批量插入文档
+    async fn batch_insert_documents(&mut self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError>;
+    
+    /// 获取文档
+    async fn get_document(&self, id: &str) -> Result<Option<DocumentRecord>, VectorDbError>;
+    
+    /// 删除文档
+    async fn delete_document(&mut self, id: &str) -> Result<bool, VectorDbError>;
+    
+    /// 更新文档
+    async fn update_document(&mut self, id: &str, document: Document) -> Result<bool, VectorDbError>;
+    
+    /// 向量搜索
+    async fn vector_search(
+        &self,
+        query_vector: &[f32],
+        limit: usize,
+        threshold: Option<f32>,
+    ) -> Result<Vec<SearchResult>, VectorDbError>;
+    
+    /// 文本搜索
+    async fn text_search(
+        &self,
+        query: &str,
+        limit: usize,
+        filters: Option<HashMap<String, String>>,
+    ) -> Result<Vec<SearchResult>, VectorDbError>;
+    
+    /// 混合搜索
+    async fn hybrid_search(
+        &self,
+        query: &str,
+        query_vector: Option<&[f32]>,
+        limit: usize,
+        alpha: f32,
+    ) -> Result<Vec<SearchResult>, VectorDbError>;
+    
+    /// 获取统计信息
+    async fn get_stats(&self) -> Result<VectorDbStats, VectorDbError>;
+    
+    /// 优化存储
+    async fn optimize(&mut self) -> Result<(), VectorDbError>;
+    
+    /// 备份数据
+    async fn backup(&self, path: &Path) -> Result<(), VectorDbError>;
+    
+    /// 恢复数据
+    async fn restore(&mut self, path: &Path) -> Result<(), VectorDbError>;
+    
+    /// 清空所有数据
+    async fn clear(&mut self) -> Result<(), VectorDbError>;
+    
+    /// 获取文档数量
+    async fn count_documents(&self) -> Result<usize, VectorDbError>;
+    
+    /// 列出所有文档ID
+    async fn list_document_ids(&self, offset: usize, limit: usize) -> Result<Vec<String>, VectorDbError>;
+    
+    /// 检查文档是否存在
+    async fn document_exists(&self, id: &str) -> Result<bool, VectorDbError>;
+    
+    /// 获取文档元数据
+    async fn get_document_metadata(&self, id: &str) -> Result<Option<HashMap<String, String>>, VectorDbError>;
+    
+    /// 更新文档元数据
+    async fn update_document_metadata(&mut self, id: &str, metadata: HashMap<String, String>) -> Result<bool, VectorDbError>;
+    
+    /// 按条件搜索文档
+    async fn search_by_metadata(
+        &self,
+        filters: HashMap<String, String>,
+        limit: usize,
+    ) -> Result<Vec<DocumentRecord>, VectorDbError>;
 }
 
-/// 基于Sled的向量存储实现
-pub struct SledVectorStore {
-    db: Arc<Db>,
-    documents: Tree,
-    vectors: Tree,
-    metadata: Tree,
-    cache: Cache<String, DocumentRecord>,
-    stats: Arc<RwLock<DatabaseStats>>,
-    config: VectorDbConfig,
-}
-
-impl SledVectorStore {
-    pub async fn new(data_dir: PathBuf, config: &VectorDbConfig) -> Result<Self> {
-        // 创建数据目录
-        tokio::fs::create_dir_all(&data_dir).await
-            .map_err(|e| VectorDbError::storage_error(format!("无法创建数据目录: {}", e)))?;
-
-        // 打开Sled数据库
-        let db_path = data_dir.join("vector_db");
-        let db = task::spawn_blocking(move || {
-            sled::open(db_path)
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("无法打开数据库: {}", e)))?;
-
-        let db = Arc::new(db);
-
-        // 打开不同的树（表）
-        let documents = db.open_tree("documents")
-            .map_err(|e| VectorDbError::storage_error(format!("无法打开文档树: {}", e)))?;
-        let vectors = db.open_tree("vectors")
-            .map_err(|e| VectorDbError::storage_error(format!("无法打开向量树: {}", e)))?;
-        let metadata = db.open_tree("metadata")
-            .map_err(|e| VectorDbError::storage_error(format!("无法打开元数据树: {}", e)))?;
-
-        // 创建缓存
-        let cache = Cache::builder()
-            .max_capacity(config.cache.embedding_cache_size as u64)
-            .time_to_live(Duration::from_secs(config.cache.cache_ttl_seconds))
-            .build();
-
-        // 初始化统计信息
-        let stats = Arc::new(RwLock::new(DatabaseStats::default()));
-
-        let mut store = Self {
-            db,
-            documents,
-            vectors,
-            metadata,
-            cache,
-            stats,
-            config: config.clone(),
-        };
-
-        // 加载现有统计信息
-        store.load_stats().await?;
-
-        Ok(store)
-    }
-
-    async fn load_stats(&mut self) -> Result<()> {
-        let metadata = self.metadata.clone();
-        let stats = task::spawn_blocking(move || {
-            if let Ok(Some(data)) = metadata.get("stats") {
-                bincode::deserialize::<DatabaseStats>(&data)
-                    .map_err(|e| VectorDbError::storage_error(format!("无法反序列化统计信息: {}", e)))
-            } else {
-                Ok(DatabaseStats::default())
-            }
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))??;
-
-        *self.stats.write() = stats;
-        Ok(())
-    }
-
-    async fn save_stats(&self) -> Result<()> {
-        let stats = self.stats.read().clone();
-        let metadata = self.metadata.clone();
-        
-        task::spawn_blocking(move || {
-            let data = bincode::serialize(&stats)
-                .map_err(|e| VectorDbError::storage_error(format!("无法序列化统计信息: {}", e)))?;
-            metadata.insert("stats", data)
-                .map_err(|e| VectorDbError::storage_error(format!("无法保存统计信息: {}", e)))?;
-            Ok::<(), VectorDbError>(())
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))??;
-
-        Ok(())
-    }
-
-    fn update_stats(&self, delta_docs: i64, delta_vectors: i64) {
-        let mut stats = self.stats.write();
-        stats.document_count = (stats.document_count as i64 + delta_docs).max(0) as usize;
-        stats.vector_count = (stats.vector_count as i64 + delta_vectors).max(0) as usize;
-        
-        // 估算内存使用量（简化计算）
-        stats.memory_usage_mb = (stats.document_count * 1024 + stats.vector_count * self.config.vector_dimension * 4) as f64 / (1024.0 * 1024.0);
-    }
-}
-
-#[async_trait]
-impl VectorStore for SledVectorStore {
-    async fn add_document(&mut self, record: DocumentRecord) -> Result<()> {
-        let id = record.id.clone();
-        let vector = record.embedding.clone();
-        
-        // 序列化文档记录
-        let doc_data = bincode::serialize(&record)
-            .map_err(|e| VectorDbError::storage_error(format!("无法序列化文档: {}", e)))?;
-        
-        // 序列化向量
-        let vector_data = bincode::serialize(&vector)
-            .map_err(|e| VectorDbError::storage_error(format!("无法序列化向量: {}", e)))?;
-
-        let documents = self.documents.clone();
-        let vectors = self.vectors.clone();
-        let id_clone = id.clone();
-        
-        // 异步保存到数据库
-        let was_new = task::spawn_blocking(move || {
-            let was_new = !documents.contains_key(&id_clone)?;
-            documents.insert(&id_clone, doc_data)?;
-            vectors.insert(&id_clone, vector_data)?;
-            Ok::<bool, sled::Error>(was_new)
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("数据库操作失败: {}", e)))?;
-
-        // 更新缓存
-        self.cache.insert(id.clone(), record).await;
-
-        // 更新统计信息
-        if was_new {
-            self.update_stats(1, 1);
-        }
-
-        Ok(())
-    }
-
-    async fn get_document(&self, id: &str) -> Result<Option<DocumentRecord>> {
-        // 先检查缓存
-        if let Some(record) = self.cache.get(id).await {
-            return Ok(Some(record));
-        }
-
-        // 从数据库读取
-        let documents = self.documents.clone();
-        let id_owned = id.to_string();
-        
-        let record = task::spawn_blocking(move || {
-            if let Some(data) = documents.get(&id_owned)? {
-                let record: DocumentRecord = bincode::deserialize(&data)
-                    .map_err(|e| VectorDbError::storage_error(format!("无法反序列化文档: {}", e)))?;
-                Ok(Some(record))
-            } else {
-                Ok(None)
-            }
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?;
-
-        // 如果找到，加入缓存
-        if let Ok(Some(ref record)) = record {
-            self.cache.insert(id.to_string(), record.clone()).await;
-        }
-
-        record
-    }
-
-    async fn search_similar(&self, query_vector: &[f32], limit: usize) -> Result<Vec<String>> {
-        let vectors = self.vectors.clone();
-        let query_vec = query_vector.to_vec();
-        
-        // 简化的向量相似度搜索（线性扫描）
-        // 在实际应用中，这里应该使用HNSW或其他高效的向量索引
-        let results = task::spawn_blocking(move || {
-            let mut similarities: Vec<(String, f32)> = Vec::new();
-            
-            for item in vectors.iter() {
-                let (key, value) = item?;
-                let id = String::from_utf8_lossy(&key).to_string();
-                
-                if let Ok(stored_vector) = bincode::deserialize::<Vec<f32>>(&value) {
-                    let similarity = cosine_similarity(&query_vec, &stored_vector);
-                    similarities.push((id, similarity));
-                }
-            }
-            
-            // 按相似度排序
-            similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
-            // 返回前limit个结果
-            let result_ids: Vec<String> = similarities
-                .into_iter()
-                .take(limit)
-                .map(|(id, _)| id)
-                .collect();
-                
-            Ok::<Vec<String>, sled::Error>(result_ids)
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("搜索失败: {}", e)))?;
-
-        Ok(results)
-    }
-
-    async fn delete_document(&mut self, id: &str) -> Result<bool> {
-        let documents = self.documents.clone();
-        let vectors = self.vectors.clone();
-        let id_owned = id.to_string();
-        
-        let existed = task::spawn_blocking(move || {
-            let doc_existed = documents.remove(&id_owned)?.is_some();
-            let vec_existed = vectors.remove(&id_owned)?.is_some();
-            Ok::<bool, sled::Error>(doc_existed || vec_existed)
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("删除失败: {}", e)))?;
-
-        if existed {
-            // 从缓存中移除
-            self.cache.remove(id).await;
-            // 更新统计信息
-            self.update_stats(-1, -1);
-        }
-
-        Ok(existed)
-    }
-
-    async fn update_document(&mut self, record: DocumentRecord) -> Result<()> {
-        // 更新操作等同于添加（覆盖）
-        self.add_document(record).await
-    }
-
-    async fn list_documents(&self, offset: usize, limit: usize) -> Result<Vec<DocumentRecord>> {
-        let documents = self.documents.clone();
-        
-        let records = task::spawn_blocking(move || {
-            let mut results = Vec::new();
-            let mut count = 0;
-            let mut skipped = 0;
-            
-            for item in documents.iter() {
-                if skipped < offset {
-                    skipped += 1;
-                    continue;
-                }
-                
-                if count >= limit {
-                    break;
-                }
-                
-                let (_, value) = item?;
-                if let Ok(record) = bincode::deserialize::<DocumentRecord>(&value) {
-                    results.push(record);
-                    count += 1;
-                }
-            }
-            
-            Ok::<Vec<DocumentRecord>, sled::Error>(results)
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("列表查询失败: {}", e)))?;
-
-        Ok(records)
-    }
-
-    async fn save(&self) -> Result<()> {
-        let db = self.db.clone();
-        
-        // 保存统计信息
-        self.save_stats().await?;
-        
-        // 刷新数据库
-        task::spawn_blocking(move || {
-            db.flush()
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("数据库刷新失败: {}", e)))?;
-
-        Ok(())
-    }
-
-    async fn load(&mut self) -> Result<()> {
-        // 重新加载统计信息
-        self.load_stats().await?;
-        
-        // 清空缓存以确保数据一致性
-        self.cache.invalidate_all();
-        
-        Ok(())
-    }
-
-    async fn compact(&self) -> Result<()> {
-        let documents = self.documents.clone();
-        let vectors = self.vectors.clone();
-        let metadata = self.metadata.clone();
-        
-        task::spawn_blocking(move || {
-            // 压缩各个树
-            documents.flush()?;
-            vectors.flush()?;
-            metadata.flush()?;
-            Ok::<(), sled::Error>(())
-        }).await
-            .map_err(|e| VectorDbError::storage_error(format!("任务执行失败: {}", e)))?
-            .map_err(|e| VectorDbError::storage_error(format!("压缩失败: {}", e)))?;
-
-        Ok(())
-    }
-
-    fn stats(&self) -> DatabaseStats {
-        self.stats.read().clone()
-    }
-}
-
-/// 计算余弦相似度
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
-        return 0.0;
-    }
-
-    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot_product / (norm_a * norm_b)
-    }
-}
-
-/// 基础向量存储实现（保持向后兼容）
+/// 基础向量存储实现
 pub struct BasicVectorStore {
-    inner: SledVectorStore,
+    db: Db,
 }
 
 impl BasicVectorStore {
-    pub async fn new(data_dir: PathBuf, config: &VectorDbConfig) -> Result<Self> {
-        let inner = SledVectorStore::new(data_dir, config).await?;
-        Ok(Self { inner })
+    /// 创建新的向量存储实例
+    pub fn new(db_path: &str) -> Result<Self, VectorDbError> {
+        let db = sled::open(db_path)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        
+        Ok(Self { db })
+    }
+    
+    /// 从现有数据库创建实例
+    pub fn from_db(db: Db) -> Self {
+        Self { db }
     }
 }
 
 #[async_trait]
 impl VectorStore for BasicVectorStore {
-    async fn add_document(&mut self, record: DocumentRecord) -> Result<()> {
-        self.inner.add_document(record).await
-    }
+    async fn insert_document(&mut self, document: Document) -> Result<String, VectorDbError> {
+        let id = if document.id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            document.id.clone()
+        };
 
-    async fn get_document(&self, id: &str) -> Result<Option<DocumentRecord>> {
-        self.inner.get_document(id).await
-    }
+        let now = chrono::Utc::now();
+        let record = DocumentRecord {
+            id: id.clone(),
+            content: document.content,
+            title: document.title.unwrap_or_default(),
+            language: document.language.unwrap_or_default(),
+            package_name: document.package_name.unwrap_or_default(),
+            version: document.version.unwrap_or_default(),
+            doc_type: document.doc_type.unwrap_or_default(),
+            vector: document.vector,
+            metadata: document.metadata,
+            embedding: Vec::new(), // 需要后续生成
+            sparse_representation: None,
+            created_at: now,
+            updated_at: now,
+        };
 
-    async fn search_similar(&self, query_vector: &[f32], limit: usize) -> Result<Vec<String>> {
-        self.inner.search_similar(query_vector, limit).await
-    }
+        let key = format!("doc:{}", id);
+        let value = postcard::to_allocvec(&record)
+            .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+        
+        self.db.insert(key, value)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
 
-    async fn delete_document(&mut self, id: &str) -> Result<bool> {
-        self.inner.delete_document(id).await
+        Ok(id)
     }
+    
+    async fn batch_insert_documents(&mut self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError> {
+        let mut ids = Vec::new();
+        for document in documents {
+            let id = self.insert_document(document).await?;
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+    
+    async fn get_document(&self, id: &str) -> Result<Option<DocumentRecord>, VectorDbError> {
+        let key = format!("doc:{}", id);
+        match self.db.get(&key) {
+            Ok(Some(value)) => {
+                let record = postcard::from_bytes::<DocumentRecord>(&value)
+                    .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+                Ok(Some(record))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(VectorDbError::StorageError(e.to_string())),
+        }
+    }
+    
+    async fn delete_document(&mut self, id: &str) -> Result<bool, VectorDbError> {
+        let key = format!("doc:{}", id);
+        match self.db.remove(&key) {
+            Ok(Some(_)) => Ok(true),
+            Ok(None) => Ok(false),
+            Err(e) => Err(VectorDbError::StorageError(e.to_string())),
+        }
+    }
+    
+    async fn update_document(&mut self, id: &str, document: Document) -> Result<bool, VectorDbError> {
+        let key = format!("doc:{}", id);
+        
+        // 检查文档是否存在
+        if let Ok(Some(existing_data)) = self.db.get(&key) {
+            let mut existing_record = postcard::from_bytes::<DocumentRecord>(&existing_data)
+                .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+            
+            // 更新字段
+            existing_record.content = document.content;
+            existing_record.title = document.title.unwrap_or(existing_record.title);
+            existing_record.language = document.language.unwrap_or(existing_record.language);
+            existing_record.package_name = document.package_name.unwrap_or(existing_record.package_name);
+            existing_record.version = document.version.unwrap_or(existing_record.version);
+            existing_record.doc_type = document.doc_type.unwrap_or(existing_record.doc_type);
+            existing_record.vector = document.vector.or(existing_record.vector);
+            existing_record.metadata = document.metadata;
+            existing_record.updated_at = chrono::Utc::now();
+            
+            let value = postcard::to_allocvec(&existing_record)
+                .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+            
+            self.db.insert(key, value)
+                .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    
+    async fn vector_search(
+        &self,
+        query_vector: &[f32],
+        limit: usize,
+        threshold: Option<f32>,
+    ) -> Result<Vec<SearchResult>, VectorDbError> {
+        let mut results = Vec::new();
+        
+        for item in self.db.iter() {
+            let (key, value) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    if let Ok(record) = postcard::from_bytes::<DocumentRecord>(&value) {
+                        if let Some(ref vector) = record.vector {
+                            let similarity = cosine_similarity(query_vector, vector);
+                            
+                            if let Some(thresh) = threshold {
+                                if similarity < thresh {
+                                    continue;
+                                }
+                            }
+                            
+                            results.push(SearchResult {
+                                document: record,
+                                score: similarity,
+                                relevance_score: Some(similarity),
+                                matched_snippets: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        
+        Ok(results)
+    }
+    
+    async fn text_search(
+        &self,
+        query: &str,
+        limit: usize,
+        _filters: Option<HashMap<String, String>>,
+    ) -> Result<Vec<SearchResult>, VectorDbError> {
+        let mut results = Vec::new();
+        let query_lower = query.to_lowercase();
+        
+        for item in self.db.iter() {
+            let (key, value) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    if let Ok(record) = postcard::from_bytes::<DocumentRecord>(&value) {
+                        let content_lower = record.content.to_lowercase();
+                        let title_lower = record.title.to_lowercase();
+                        
+                        let mut score = 0.0;
+                        if content_lower.contains(&query_lower) {
+                            score += 0.7;
+                        }
+                        if title_lower.contains(&query_lower) {
+                            score += 0.3;
+                        }
+                        
+                        if score > 0.0 {
+                            results.push(SearchResult {
+                                document: record,
+                                score,
+                                relevance_score: Some(score),
+                                matched_snippets: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        
+        Ok(results)
+    }
+    
+    async fn hybrid_search(
+        &self,
+        query: &str,
+        query_vector: Option<&[f32]>,
+        limit: usize,
+        alpha: f32,
+    ) -> Result<Vec<SearchResult>, VectorDbError> {
+        let text_results = self.text_search(query, limit * 2, None).await?;
+        
+        if let Some(vector) = query_vector {
+            let vector_results = self.vector_search(vector, limit * 2, None).await?;
+            
+            // 合并结果
+            let mut combined_results = HashMap::new();
+            
+            for result in text_results {
+                combined_results.insert(result.document.id.clone(), (result, alpha));
+            }
+            
+            for result in vector_results {
+                if let Some((mut existing, text_weight)) = combined_results.remove(&result.document.id) {
+                    existing.score = text_weight * existing.score + (1.0 - alpha) * result.score;
+                    combined_results.insert(result.document.id.clone(), (existing, 0.0));
+                } else {
+                    combined_results.insert(result.document.id.clone(), (result, 0.0));
+                }
+            }
+            
+            let mut final_results: Vec<SearchResult> = combined_results.into_values().map(|(result, _)| result).collect();
+            final_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            final_results.truncate(limit);
+            
+            Ok(final_results)
+        } else {
+            Ok(text_results)
+        }
+    }
+    
+    async fn get_stats(&self) -> Result<VectorDbStats, VectorDbError> {
+        let mut document_count = 0;
+        let mut total_size = 0;
+        
+        for item in self.db.iter() {
+            let (key, value) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    document_count += 1;
+                    total_size += value.len();
+                }
+            }
+        }
+        
+        Ok(VectorDbStats {
+            total_documents: document_count,
+            total_vectors: document_count, // 假设每个文档都有向量
+            index_size_bytes: total_size as u64,
+            memory_usage_bytes: total_size as u64,
+            last_optimization: None,
+        })
+    }
+    
+    async fn optimize(&mut self) -> Result<(), VectorDbError> {
+        // Sled 自动优化，这里可以添加其他优化逻辑
+        Ok(())
+    }
+    
+    async fn backup(&self, path: &Path) -> Result<(), VectorDbError> {
+        // 简单实现：导出所有数据到文件
+        let mut backup_data = Vec::new();
+        for item in self.db.iter() {
+            let (key, value) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            backup_data.push((key.to_vec(), value.to_vec()));
+        }
+        
+        let serialized = postcard::to_allocvec(&backup_data)
+            .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+        std::fs::write(path, serialized)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        Ok(())
+    }
+    
+    async fn restore(&mut self, _path: &Path) -> Result<(), VectorDbError> {
+        // TODO: 实现恢复逻辑
+        Err(VectorDbError::NotImplemented("restore not implemented".to_string()))
+    }
+    
+    async fn clear(&mut self) -> Result<(), VectorDbError> {
+        self.db.clear()
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        Ok(())
+    }
+    
+    async fn count_documents(&self) -> Result<usize, VectorDbError> {
+        let mut count = 0;
+        for item in self.db.iter() {
+            let (key, _) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+    
+    async fn list_document_ids(&self, offset: usize, limit: usize) -> Result<Vec<String>, VectorDbError> {
+        let mut ids = Vec::new();
+        let mut current = 0;
+        
+        for item in self.db.iter() {
+            let (key, _) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    if current >= offset {
+                        if ids.len() >= limit {
+                            break;
+                        }
+                        ids.push(key_str.strip_prefix("doc:").unwrap().to_string());
+                    }
+                    current += 1;
+                }
+            }
+        }
+        
+        Ok(ids)
+    }
+    
+    async fn document_exists(&self, id: &str) -> Result<bool, VectorDbError> {
+        let key = format!("doc:{}", id);
+        Ok(self.db.contains_key(&key)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?)
+    }
+    
+    async fn get_document_metadata(&self, id: &str) -> Result<Option<HashMap<String, String>>, VectorDbError> {
+        if let Some(record) = self.get_document(id).await? {
+            Ok(Some(record.metadata))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    async fn update_document_metadata(&mut self, id: &str, metadata: HashMap<String, String>) -> Result<bool, VectorDbError> {
+        let key = format!("doc:{}", id);
+        
+        if let Ok(Some(existing_data)) = self.db.get(&key) {
+            let mut existing_record = postcard::from_bytes::<DocumentRecord>(&existing_data)
+                .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+            
+            existing_record.metadata = metadata;
+            existing_record.updated_at = chrono::Utc::now();
+            
+            let value = postcard::to_allocvec(&existing_record)
+                .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+            
+            self.db.insert(key, value)
+                .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+    
+    async fn search_by_metadata(
+        &self,
+        filters: HashMap<String, String>,
+        limit: usize,
+    ) -> Result<Vec<DocumentRecord>, VectorDbError> {
+        let mut results = Vec::new();
+        
+        for item in self.db.iter() {
+            let (key, value) = item.map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+            
+            if let Ok(key_str) = std::str::from_utf8(&key) {
+                if key_str.starts_with("doc:") {
+                    if let Ok(record) = postcard::from_bytes::<DocumentRecord>(&value) {
+                        let mut matches = true;
+                        for (filter_key, filter_value) in &filters {
+                            if let Some(metadata_value) = record.metadata.get(filter_key) {
+                                if metadata_value != filter_value {
+                                    matches = false;
+                                    break;
+                                }
+                            } else {
+                                matches = false;
+                                break;
+                            }
+                        }
+                        
+                        if matches {
+                            results.push(record);
+                            if results.len() >= limit {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(results)
+    }
+}
 
-    async fn update_document(&mut self, record: DocumentRecord) -> Result<()> {
-        self.inner.update_document(record).await
+/// 计算两个向量的余弦相似度
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
     }
-
-    async fn list_documents(&self, offset: usize, limit: usize) -> Result<Vec<DocumentRecord>> {
-        self.inner.list_documents(offset, limit).await
+    
+    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
     }
-
-    async fn save(&self) -> Result<()> {
-        self.inner.save().await
-    }
-
-    async fn load(&mut self) -> Result<()> {
-        self.inner.load().await
-    }
-
-    async fn compact(&self) -> Result<()> {
-        self.inner.compact().await
-    }
-
-    fn stats(&self) -> DatabaseStats {
-        self.inner.stats()
-    }
+    
+    dot_product / (norm_a * norm_b)
 } 

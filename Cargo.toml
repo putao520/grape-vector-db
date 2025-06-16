@@ -4,48 +4,95 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# 异步运行时
+# 核心异步运行时
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = "1.3"
+postcard = { version = "1.0", features = ["alloc"] }
 
 # 错误处理
 thiserror = "1.0"
+anyhow = "1.0"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 网络和gRPC
+tonic = "0.12"
+prost = "0.13"
+
+# 数据库存储
+sled = "0.34"
+# 暂时移除rocksdb，避免bindgen问题
+# rocksdb = "0.22"
+
+# 高性能锁
+parking_lot = "0.12"
+
+# 向量索引
+instant-distance = "0.6"  # HNSW索引
+# 暂时移除candle，避免bindgen问题
+# candle-core = "0.6"
+# candle-nn = "0.6"
+
+# 高性能并行计算
+rayon = "1.8"           # 数据并行
+crossbeam = "0.8"       # 无锁并发
+
+# 缓存
+moka = { version = "0.12", features = ["future", "sync"] }
+fastrand = "2.0"        # 快速随机数生成
 
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
 
-# HTTP客户端
-reqwest = { version = "0.11", features = ["json"] }
+# UUID生成
+uuid = { version = "1.0", features = ["v4", "serde"] }
 
-# 数据库存储（简化版本）
-sled = "0.34"
+# 数学计算
+nalgebra = "0.33"       # 线性代数
+ndarray = "0.16"        # 多维数组
 
-# 缓存
-moka = { version = "0.12", features = ["future"] }
+# 性能监控
+# 暂时移除metrics，避免复杂依赖
+# metrics = "0.23"
+# metrics-exporter-prometheus = "0.15"
 
-# 向量索引
-instant-distance = "0.6"
+# 配置管理
+config = "0.14"
+toml = "0.8"
 
-# 性能指标
-metrics = "0.21"
-atomic_float = "0.1"
+# 网络客户端
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
-# 并发
-parking_lot = "0.12"
-anyhow = "1.0.98"
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
-toml = "0.8.22"
-uuid = { version = "1.17.0", features = ["v4", "serde"] }
-futures = "0.3.31"
+# 压缩
+flate2 = "1.0"
 
+# 内存映射
+memmap2 = "0.9"
+
+# 文件系统操作
+walkdir = "2.0"
+
+# 字符串处理
+regex = "1.0"
+
+# 数据结构
+dashmap = "6.0"         # 并发HashMap
+smallvec = "1.0"        # 小向量优化
+
+# 异步工具
+futures = "0.3"
+
+# 随机数生成
+rand = "0.8"
+
+# 测试依赖
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.0"
-
-[features]
-default = []
+proptest = "1.0"

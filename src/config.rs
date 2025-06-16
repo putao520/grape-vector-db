@@ -68,6 +68,102 @@ pub struct AiIntegrationConfig {
     pub api_timeout_seconds: u64,
 }
 
+/// 混合搜索权重配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HybridWeights {
+    /// 密集向量权重
+    pub dense_weight: f32,
+    /// 稀疏向量权重  
+    pub sparse_weight: f32,
+    /// 文本搜索权重
+    pub text_weight: f32,
+}
+
+impl Default for HybridWeights {
+    fn default() -> Self {
+        Self {
+            dense_weight: 0.7,
+            sparse_weight: 0.2,
+            text_weight: 0.1,
+        }
+    }
+}
+
+/// BM25 算法配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BM25Config {
+    /// k1 参数，控制词频饱和度
+    pub k1: f32,
+    /// b 参数，控制文档长度归一化
+    pub b: f32,
+    /// 是否启用稀疏向量索引
+    pub enabled: bool,
+}
+
+impl Default for BM25Config {
+    fn default() -> Self {
+        Self {
+            k1: 1.2,
+            b: 0.75,
+            enabled: true,
+        }
+    }
+}
+
+/// 混合搜索配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HybridSearchConfig {
+    /// 融合策略
+    pub fusion_strategy: crate::types::FusionStrategy,
+    /// 各权重配置
+    pub weights: HybridWeights,
+    /// BM25 配置
+    pub bm25: BM25Config,
+    /// 是否启用混合搜索
+    pub enabled: bool,
+    /// 最大候选结果数（用于融合前的搜索）
+    pub max_candidates: usize,
+}
+
+impl Default for HybridSearchConfig {
+    fn default() -> Self {
+        Self {
+            fusion_strategy: crate::types::FusionStrategy::default(),
+            weights: HybridWeights::default(),
+            bm25: BM25Config::default(),
+            enabled: true,
+            max_candidates: 100,
+        }
+    }
+}
+
+/// 稀疏向量配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseVectorConfig {
+    /// 是否启用稀疏向量
+    pub enabled: bool,
+    /// 最大词汇表大小
+    pub max_vocabulary_size: usize,
+    /// 停用词文件路径（可选）
+    pub stopwords_file: Option<String>,
+    /// 是否自动更新词汇表
+    pub auto_update_vocabulary: bool,
+    /// 词汇表更新间隔（文档数）
+    pub vocabulary_update_interval: usize,
+}
+
+impl Default for SparseVectorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_vocabulary_size: 100000,
+            stopwords_file: None,
+            auto_update_vocabulary: true,
+            vocabulary_update_interval: 1000,
+        }
+    }
+}
+
 /// 向量数据库配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorDbConfig {
@@ -88,6 +184,11 @@ pub struct VectorDbConfig {
     
     /// 查询配置
     pub query: QueryConfig,
+
+    /// 混合搜索配置
+    pub hybrid_search: HybridSearchConfig,
+    /// 稀疏向量配置
+    pub sparse_vector: SparseVectorConfig,
 }
 
 /// HNSW 索引配置
@@ -183,19 +284,6 @@ pub struct QueryConfig {
     
     /// 相似度阈值
     pub similarity_threshold: f32,
-}
-
-/// 混合搜索权重
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HybridWeights {
-    /// 向量相似度权重
-    pub vector: f32,
-    
-    /// 关键词匹配权重
-    pub keyword: f32,
-    
-    /// 上下文权重
-    pub context: f32,
 }
 
 impl Default for SystemConfig {
@@ -316,6 +404,8 @@ impl Default for VectorDbConfig {
             cache: CacheConfig::default(),
             persistence: PersistenceConfig::default(),
             query: QueryConfig::default(),
+            hybrid_search: HybridSearchConfig::default(),
+            sparse_vector: SparseVectorConfig::default(),
         }
     }
 }
@@ -376,16 +466,6 @@ impl Default for QueryConfig {
             max_limit: 100,
             hybrid_weights: HybridWeights::default(),
             similarity_threshold: 0.5,
-        }
-    }
-}
-
-impl Default for HybridWeights {
-    fn default() -> Self {
-        Self {
-            vector: 0.6,
-            keyword: 0.3,
-            context: 0.1,
         }
     }
 } 

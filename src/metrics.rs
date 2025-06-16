@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use parking_lot::RwLock;
-use metrics::{counter, gauge, histogram, register_counter, register_gauge, register_histogram};
+use metrics;
 use std::collections::VecDeque;
 use atomic_float::AtomicF64;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -101,12 +101,12 @@ impl CacheStats {
 
     fn record_hit(&self) {
         self.hits.fetch_add(1, Ordering::Relaxed);
-        counter!("cache_hits_total").increment(1);
+        metrics::increment_counter!("cache_hits_total");
     }
 
     fn record_miss(&self) {
         self.misses.fetch_add(1, Ordering::Relaxed);
-        counter!("cache_misses_total").increment(1);
+        metrics::increment_counter!("cache_misses_total");
     }
 
     fn hit_rate(&self) -> f64 {
@@ -172,20 +172,8 @@ pub struct MetricsCollector {
 
 impl MetricsCollector {
     pub fn new() -> Self {
-        // 注册指标
-        register_counter!("queries_total", "Total number of queries");
-        register_counter!("documents_total", "Total number of documents");
-        register_counter!("errors_total", "Total number of errors");
-        register_counter!("cache_hits_total", "Total cache hits");
-        register_counter!("cache_misses_total", "Total cache misses");
-        
-        register_histogram!("query_duration_ms", "Query duration in milliseconds");
-        register_histogram!("index_build_duration_ms", "Index build duration in milliseconds");
-        
-        register_gauge!("memory_usage_mb", "Memory usage in MB");
-        register_gauge!("disk_usage_mb", "Disk usage in MB");
-        register_gauge!("cache_hit_rate", "Cache hit rate");
-        register_gauge!("queries_per_second", "Queries per second");
+        // 注册指标 - 使用简化语法
+        // metrics库会在使用时自动注册
 
         Self {
             query_times: Arc::new(RwLock::new(QueryTimeStats::new(10000))),
@@ -208,54 +196,54 @@ impl MetricsCollector {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
 
         // 更新metrics
-        histogram!("query_duration_ms").record(time_ms);
-        counter!("queries_total").increment(1);
+        metrics::histogram!("query_duration_ms", time_ms);
+        metrics::increment_counter!("queries_total");
         
         // 更新QPS gauge
         let qps = self.qps_calculator.read().current_qps();
-        gauge!("queries_per_second").set(qps);
+        metrics::gauge!("queries_per_second", qps);
     }
 
     /// 记录缓存命中
     pub fn record_cache_hit(&self) {
         self.cache_stats.record_hit();
-        gauge!("cache_hit_rate").set(self.cache_stats.hit_rate());
+        metrics::gauge!("cache_hit_rate", self.cache_stats.hit_rate());
     }
 
     /// 记录缓存未命中
     pub fn record_cache_miss(&self) {
         self.cache_stats.record_miss();
-        gauge!("cache_hit_rate").set(self.cache_stats.hit_rate());
+        metrics::gauge!("cache_hit_rate", self.cache_stats.hit_rate());
     }
 
     /// 记录错误
     pub fn record_error(&self) {
         self.total_errors.fetch_add(1, Ordering::Relaxed);
-        counter!("errors_total").increment(1);
+        metrics::increment_counter!("errors_total");
     }
 
     /// 记录索引构建时间
     pub fn record_index_build_time(&self, time_ms: f64) {
         self.index_build_time.store(time_ms, Ordering::Relaxed);
-        histogram!("index_build_duration_ms").record(time_ms);
+        metrics::histogram!("index_build_duration_ms", time_ms);
     }
 
     /// 更新文档数量
     pub fn update_document_count(&self, count: u64) {
         self.total_documents.store(count, Ordering::Relaxed);
-        gauge!("documents_total").set(count as f64);
+        metrics::gauge!("documents_total", count as f64);
     }
 
     /// 更新内存使用量
     pub fn update_memory_usage(&self, mb: f64) {
         self.memory_usage.store(mb, Ordering::Relaxed);
-        gauge!("memory_usage_mb").set(mb);
+        metrics::gauge!("memory_usage_mb", mb);
     }
 
     /// 更新磁盘使用量
     pub fn update_disk_usage(&self, mb: f64) {
         self.disk_usage.store(mb, Ordering::Relaxed);
-        gauge!("disk_usage_mb").set(mb);
+        metrics::gauge!("disk_usage_mb", mb);
     }
 
     /// 获取当前指标
@@ -301,6 +289,25 @@ impl MetricsCollector {
         
         // 重置QPS计算器
         self.qps_calculator.write().query_times.clear();
+    }
+
+    /// 导出最终统计信息
+    pub fn export_final_stats(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let metrics = self.get_metrics();
+        
+        tracing::info!("Final metrics:");
+        tracing::info!("  Total queries: {}", metrics.total_queries);
+        tracing::info!("  Average query time: {:.2}ms", metrics.average_query_time_ms);
+        tracing::info!("  P95 query time: {:.2}ms", metrics.p95_query_time_ms);
+        tracing::info!("  P99 query time: {:.2}ms", metrics.p99_query_time_ms);
+        tracing::info!("  Cache hit rate: {:.2}%", metrics.cache_hit_rate * 100.0);
+        tracing::info!("  QPS: {:.2}", metrics.queries_per_second);
+        tracing::info!("  Total documents: {}", metrics.total_documents);
+        tracing::info!("  Memory usage: {:.2}MB", metrics.memory_usage_mb);
+        tracing::info!("  Disk usage: {:.2}MB", metrics.disk_usage_mb);
+        tracing::info!("  Error rate: {:.2}%", metrics.error_rate * 100.0);
+        
+        Ok(())
     }
 
     /// 导出Prometheus格式的指标
