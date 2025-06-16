@@ -366,38 +366,48 @@ impl RaftNode {
         // 重置心跳时间
         *self.last_heartbeat.write().await = Instant::now();
 
-        let success = if request.term < *current_term {
-            // 任期过时
-            false
+        let (success, match_index) = if request.term < *current_term {
+            // 任期过时，拒绝请求
+            (false, 0)
         } else if request.prev_log_index > 0 {
             // 检查前一个日志条目是否匹配
             if request.prev_log_index > log.len() as LogIndex {
-                false
+                // 日志不够长，存在缺失
+                debug!("日志缺失: 请求索引 {}, 本地日志长度 {}", request.prev_log_index, log.len());
+                (false, 0)
             } else {
                 let prev_entry = &log[(request.prev_log_index - 1) as usize];
-                prev_entry.term == request.prev_log_term
+                if prev_entry.term == request.prev_log_term {
+                    // 日志匹配，处理新条目
+                    self.handle_log_entries(&mut log, &request).await
+                } else {
+                    // 日志冲突，需要回滚
+                    warn!("日志冲突: 索引 {}, 期望任期 {}, 实际任期 {}", 
+                          request.prev_log_index, request.prev_log_term, prev_entry.term);
+                    (false, 0)
+                }
             }
         } else {
-            true
+            // 第一个日志条目或心跳
+            self.handle_log_entries(&mut log, &request).await
         };
 
-        let match_index = if success {
-            // 删除冲突的日志条目
-            if !request.entries.is_empty() {
-                let start_index = request.prev_log_index as usize;
-                log.truncate(start_index);
-                log.extend(request.entries);
+        // 更新提交索引
+        if success && request.leader_commit > *commit_index {
+            let new_commit_index = std::cmp::min(request.leader_commit, log.len() as LogIndex);
+            if new_commit_index > *commit_index {
+                *commit_index = new_commit_index;
+                debug!("更新提交索引到: {}", *commit_index);
+                
+                // 异步应用已提交的条目
+                let self_clone = self.clone_for_apply();
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.apply_committed_entries().await {
+                        error!("应用已提交条目失败: {}", e);
+                    }
+                });
             }
-
-            // 更新提交索引
-            if request.leader_commit > *commit_index {
-                *commit_index = std::cmp::min(request.leader_commit, log.len() as LogIndex);
-            }
-
-            log.len() as LogIndex
-        } else {
-            0
-        };
+        }
 
         Ok(AppendResponse {
             term: *current_term,
@@ -982,6 +992,139 @@ impl RaftNode {
             }
         }
 
+        Ok(())
+    }
+
+    /// 处理日志条目追加和冲突解决
+    async fn handle_log_entries(&self, log: &mut Vec<LogEntry>, request: &AppendRequest) -> (bool, LogIndex) {
+        if request.entries.is_empty() {
+            // 这是心跳请求，没有日志条目
+            return (true, log.len() as LogIndex);
+        }
+
+        // 查找第一个冲突的日志条目
+        let mut conflict_index = None;
+        let start_index = request.prev_log_index as usize;
+        
+        for (i, new_entry) in request.entries.iter().enumerate() {
+            let log_index = start_index + i;
+            
+            if log_index < log.len() {
+                if log[log_index].term != new_entry.term {
+                    conflict_index = Some(log_index);
+                    break;
+                }
+            } else {
+                // 日志不够长，可以直接追加
+                break;
+            }
+        }
+
+        // 如果发现冲突，删除冲突及之后的所有条目
+        if let Some(conflict_idx) = conflict_index {
+            debug!("发现日志冲突，从索引 {} 开始删除", conflict_idx);
+            log.truncate(conflict_idx);
+        } else {
+            // 没有冲突，但可能需要截断到正确的位置
+            log.truncate(start_index);
+        }
+
+        // 追加新的日志条目
+        for new_entry in &request.entries {
+            log.push(new_entry.clone());
+            
+            // 持久化新的日志条目
+            if let Err(e) = self.persist_log_entry(new_entry).await {
+                warn!("持久化日志条目失败: {}", e);
+            }
+        }
+
+        debug!("成功处理 {} 个日志条目", request.entries.len());
+        (true, log.len() as LogIndex)
+    }
+
+    /// 克隆自身用于异步操作（简化实现）
+    fn clone_for_apply(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            state: self.state.clone(),
+            current_term: self.current_term.clone(),
+            voted_for: self.voted_for.clone(),
+            log: self.log.clone(),
+            commit_index: self.commit_index.clone(),
+            last_applied: self.last_applied.clone(),
+            next_index: self.next_index.clone(),
+            match_index: self.match_index.clone(),
+            storage: self.storage.clone(),
+            command_tx: self.command_tx.clone(),
+            command_rx: self.command_rx.clone(),
+            last_heartbeat: self.last_heartbeat.clone(),
+        }
+    }
+
+    /// 日志压缩
+    pub async fn compact_log(&self, last_included_index: LogIndex, last_included_term: Term) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut log = self.log.write().await;
+        
+        if last_included_index <= 0 || last_included_index > log.len() as LogIndex {
+            return Err(format!("无效的压缩索引: {}", last_included_index).into());
+        }
+
+        // 保留压缩点之后的日志条目
+        let entries_to_keep = log.split_off(last_included_index as usize);
+        
+        // 创建快照条目
+        let snapshot_entry = LogEntry {
+            index: last_included_index,
+            term: last_included_term,
+            entry_type: LogEntryType::Snapshot,
+            data: b"snapshot_placeholder".to_vec(), // 实际实现中应该包含状态机快照
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+
+        // 重建日志：快照条目 + 保留的条目
+        log.clear();
+        log.push(snapshot_entry);
+        log.extend(entries_to_keep);
+
+        // 持久化压缩后的日志状态
+        if let Err(e) = self.persist_state().await {
+            warn!("持久化压缩状态失败: {}", e);
+        }
+
+        info!("日志压缩完成，压缩到索引 {}，当前日志长度: {}", last_included_index, log.len());
+        Ok(())
+    }
+
+    /// 检查是否需要日志压缩
+    pub async fn should_compact_log(&self) -> bool {
+        let log = self.log.read().await;
+        let last_applied = *self.last_applied.read().await;
+        
+        // 如果日志长度超过1000且已应用的条目超过总数的50%，则进行压缩
+        log.len() > 1000 && last_applied > log.len() as LogIndex / 2
+    }
+
+    /// 自动日志压缩
+    pub async fn auto_compact_log(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !self.should_compact_log().await {
+            return Ok(());
+        }
+
+        let last_applied = *self.last_applied.read().await;
+        let log = self.log.read().await;
+        
+        if last_applied > 0 && (last_applied as usize) < log.len() {
+            let last_applied_entry = &log[(last_applied - 1) as usize];
+            let compact_index = last_applied;
+            let compact_term = last_applied_entry.term;
+            
+            drop(log); // 释放读锁
+            
+            self.compact_log(compact_index, compact_term).await?;
+            info!("自动日志压缩完成");
+        }
+        
         Ok(())
     }
 } 

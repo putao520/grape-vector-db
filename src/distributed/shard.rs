@@ -267,7 +267,7 @@ impl ConsistentHashRing {
         stats.insert("cache_size".to_string(), 
                     serde_json::Value::Number(self.routing_cache.len().into()));
         stats.insert("cache_hit_ratio".to_string(), 
-                    serde_json::Value::Number((0.85).into())); // 简化的缓存命中率
+                    serde_json::Value::Number(serde_json::Number::from_f64(0.85).unwrap_or_else(|| serde_json::Number::from(85)))); // 简化的缓存命中率
         
         stats
     }
