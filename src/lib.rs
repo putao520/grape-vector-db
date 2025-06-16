@@ -304,6 +304,32 @@ impl VectorDatabase {
         let storage = self.storage.read().await;
         storage.hybrid_search(query, None, limit, 0.5).await
     }
+
+    // 同步API接口（阻塞式调用）
+    
+    /// 同步添加文档（阻塞式）
+    pub fn add_document_blocking(&self, document: Document) -> Result<String, VectorDbError> {
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.add_document(document))
+        })
+    }
+
+    /// 同步搜索（阻塞式）
+    pub fn search_blocking(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, VectorDbError> {
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.text_search(query, limit))
+        })
+    }
+
+    /// 同步删除文档（阻塞式）
+    pub fn delete_document_blocking(&self, id: &str) -> Result<bool, VectorDbError> {
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(self.delete_document(id))
+        })
+    }
 }
 
 impl VectorDbConfig {

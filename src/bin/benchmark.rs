@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
     
     // 3. 内存使用统计
     println!("💾 内存使用统计:");
-    let stats = db.get_stats();
+    let stats = db.get_stats().await;
     println!("  - 文档数量: {}", stats.document_count);
     println!("  - 密集向量数: {}", stats.dense_vector_count);
     println!("  - 内存使用: {:.2}MB", stats.memory_usage_mb);
