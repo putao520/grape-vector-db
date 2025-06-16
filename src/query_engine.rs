@@ -1,8 +1,8 @@
 use crate::types::{SearchResult, VectorDbError, QueryRequest, QueryResponse};
-use crate::storage::{VectorStore, BasicVectorStore};
-use crate::index::{VectorIndex, HnswVectorIndex, FaissVectorIndex, FaissIndexType};
+use crate::storage::{VectorStore};
+use crate::index::{VectorIndex};
 use std::sync::Arc;
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use std::collections::HashMap;
 
 /// 查询引擎配置
@@ -109,7 +109,7 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read();
+        let storage = self.storage.read().await;
         let results = storage.vector_search(query_vector, limit, threshold).await?;
 
         // 缓存结果
@@ -137,7 +137,7 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read();
+        let storage = self.storage.read().await;
         let results = storage.text_search(query, limit, filters).await?;
 
         // 缓存结果
@@ -167,7 +167,7 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read();
+        let storage = self.storage.read().await;
         let results = storage.hybrid_search(query, query_vector, limit, alpha).await?;
 
         // 缓存结果

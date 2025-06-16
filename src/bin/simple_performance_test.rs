@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::sync::Semaphore;
 use tracing::{info, warn, error};
 use grape_vector_db::{VectorDatabase, Document, VectorDbConfig, EmbeddingConfig, errors::Result};
@@ -78,7 +79,7 @@ impl SimplePerformanceTester {
             },
         };
 
-        let database = VectorDatabase::new(db_config).await?;
+        let database = VectorDatabase::new(PathBuf::from("./data/simple_test"), db_config).await?;
         
         info!("✅ 简化向量数据库已初始化");
 

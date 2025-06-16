@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     // 创建数据库配置
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./performance_test_data");
-    let mut db = VectorDatabase::new(config).await?;
+    let db = VectorDatabase::new(data_dir, config).await?;
     
     // 准备测试数据 - 减少数据量避免HNSW问题
     println!("📦 准备测试数据...");
@@ -205,7 +205,7 @@ async fn run_concurrent_test() -> Result<()> {
                 // 创建一个新的数据库连接用于并发测试
                 let config = VectorDbConfig::default();
                 let data_dir = PathBuf::from("./performance_test_data");
-                let test_db = VectorDatabase::new(config).await?;
+                let test_db = VectorDatabase::new(data_dir, config).await?;
                 
                 // 尝试多次搜索以提高成功率 - 使用文本搜索
                 for attempt in 0..3 {

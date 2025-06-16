@@ -370,9 +370,25 @@ impl VectorStore for BasicVectorStore {
         Ok(())
     }
     
-    async fn restore(&mut self, _path: &Path) -> Result<(), VectorDbError> {
-        // TODO: 实现恢复逻辑
-        Err(VectorDbError::NotImplemented("restore not implemented".to_string()))
+    async fn restore(&mut self, path: &Path) -> Result<(), VectorDbError> {
+        // 简单实现：从备份文件恢复数据
+        let backup_data = std::fs::read(path)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        
+        let data: Vec<(Vec<u8>, Vec<u8>)> = postcard::from_bytes(&backup_data)
+            .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+        
+        // 清空现有数据
+        self.db.clear()
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        
+        // 恢复数据
+        for (key, value) in data {
+            self.db.insert(key, value)
+                .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+        }
+        
+        Ok(())
     }
     
     async fn clear(&mut self) -> Result<(), VectorDbError> {
