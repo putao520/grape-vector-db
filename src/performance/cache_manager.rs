@@ -1,7 +1,6 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use moka::sync::Cache;
-use tracing::{info, debug};
 
 /// 智能缓存管理器
 pub struct CacheManager {

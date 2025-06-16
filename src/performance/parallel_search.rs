@@ -1,5 +1,4 @@
 use rayon::prelude::*;
-use std::collections::HashMap;
 
 use crate::{
     types::{SearchResult, VectorDbError},

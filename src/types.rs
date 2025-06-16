@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use thiserror::Error;
 
 /// 向量点结构体，用于存储向量数据和元数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
