@@ -2,13 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use parking_lot::RwLock;
-use rayon::prelude::*;
 use tracing::{info, debug};
 
 use crate::{
     types::{SearchResult, VectorDbError},
     storage::VectorStore,
-    index::VectorIndex,
 };
 
 /// 搜索优化器配置

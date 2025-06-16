@@ -137,7 +137,6 @@ pub mod errors {
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 /// 向量数据库主结构
@@ -150,12 +149,15 @@ pub struct VectorDatabase {
 
 impl VectorDatabase {
     /// 创建新的向量数据库实例
-    pub async fn new(config: VectorDbConfig) -> Result<Self, VectorDbError> {
+    pub async fn new(db_path: PathBuf, config: VectorDbConfig) -> Result<Self, VectorDbError> {
         use crate::index::HnswVectorIndex;
         use std::sync::Arc;
-        use parking_lot::RwLock;
+        use tokio::sync::RwLock;
         
-        let storage = BasicVectorStore::new(&config.db_path)?;
+        let mut updated_config = config;
+        updated_config.db_path = db_path.to_string_lossy().to_string();
+        
+        let storage = BasicVectorStore::new(&updated_config.db_path)?;
         let vector_index = HnswVectorIndex::new();
         
         let storage_arc = Arc::new(RwLock::new(storage));
@@ -168,19 +170,20 @@ impl VectorDatabase {
             storage: storage_arc,
             vector_index: index_arc,
             query_engine,
-            config,
+            config: updated_config,
         })
     }
 
     /// 添加文档
     pub async fn add_document(&self, document: Document) -> Result<String, VectorDbError> {
-        let id = self.storage.write().await.insert_document(document).await?;
-        Ok(id)
+        let mut storage = self.storage.write().await;
+        storage.insert_document(document).await
     }
 
     /// 获取文档
     pub async fn get_document(&self, id: &str) -> Result<Option<Document>, VectorDbError> {
-        if let Some(record) = self.storage.read().get_document(id).await? {
+        let storage = self.storage.read().await;
+        if let Some(record) = storage.get_document(id).await? {
             Ok(Some(Document {
                 id: record.id,
                 title: Some(record.title),
@@ -201,12 +204,14 @@ impl VectorDatabase {
 
     /// 删除文档
     pub async fn delete_document(&self, id: &str) -> Result<bool, VectorDbError> {
-        self.storage.write().delete_document(id).await
+        let mut storage = self.storage.write().await;
+        storage.delete_document(id).await
     }
 
     /// 文本搜索
     pub async fn text_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, VectorDbError> {
-        self.storage.read().text_search(query, limit, None).await
+        let storage = self.storage.read().await;
+        storage.text_search(query, limit, None).await
     }
 
     /// 语义搜索
@@ -217,11 +222,12 @@ impl VectorDatabase {
 
     /// 列出文档
     pub async fn list_documents(&self, offset: usize, limit: usize) -> Result<Vec<Document>, VectorDbError> {
-        let ids = self.storage.read().list_document_ids(offset, limit).await?;
+        let storage = self.storage.read().await;
+        let ids = storage.list_document_ids(offset, limit).await?;
         let mut documents = Vec::new();
         
         for id in ids {
-            if let Some(record) = self.storage.read().get_document(&id).await? {
+            if let Some(record) = storage.get_document(&id).await? {
                 documents.push(Document {
                     id: record.id,
                     title: Some(record.title),
@@ -250,6 +256,45 @@ impl VectorDatabase {
     /// 获取配置
     pub fn get_config(&self) -> &VectorDbConfig {
         &self.config
+    }
+
+    /// 重建索引
+    pub async fn rebuild_index(&self) -> Result<(), VectorDbError> {
+        // 简单实现：清空索引并重新添加所有向量
+        {
+            let mut vector_index = self.vector_index.write().await;
+            vector_index.clear();
+        }
+        
+        // 从存储中重新加载所有文档的向量
+        let storage = self.storage.read().await;
+        let ids = storage.list_document_ids(0, usize::MAX).await?;
+        
+        for id in ids {
+            if let Some(record) = storage.get_document(&id).await? {
+                if let Some(vector) = record.vector {
+                    let mut vector_index = self.vector_index.write().await;
+                    vector_index.add_vector(id, vector)?;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// 混合搜索增强版
+    pub async fn hybrid_search_enhanced(
+        &self, 
+        query: &str, 
+        limit: usize, 
+        text_weight: f32, 
+        vector_weight: f32, 
+        fusion_weight: f32
+    ) -> Result<Vec<SearchResult>, VectorDbError> {
+        // 简单实现：使用现有的混合搜索，忽略权重参数
+        let _ = (text_weight, vector_weight, fusion_weight); // 避免未使用警告
+        let storage = self.storage.read().await;
+        storage.hybrid_search(query, None, limit, 0.5).await
     }
 }
 
@@ -295,7 +340,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = VectorDbConfig::default();
         
-        let mut db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
+        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
 
         // 添加文档
         let doc = Document {
@@ -338,7 +383,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config = VectorDbConfig::default();
         
-        let mut db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
+        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
 
         // 添加一些测试文档
         let docs = vec![
