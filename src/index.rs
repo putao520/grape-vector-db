@@ -1,8 +1,6 @@
 use crate::types::VectorDbError;
 use instant_distance::{Builder, Search, HnswMap, Point};
 use std::collections::HashMap;
-use parking_lot::RwLock;
-use std::sync::Arc;
 
 /// 向量索引特征
 pub trait VectorIndex: Send + Sync {

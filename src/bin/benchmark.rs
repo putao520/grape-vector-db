@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     // 创建数据库配置
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./benchmark_data");
-    let mut db = VectorDatabase::new(data_dir, config).await?;
+    let db = VectorDatabase::new(data_dir, config).await?;
     
     // 基准测试参数
     let document_count = 1000;

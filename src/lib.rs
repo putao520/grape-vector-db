@@ -248,9 +248,17 @@ impl VectorDatabase {
     }
 
     /// 获取统计信息
-    pub fn get_stats(&self) -> DatabaseStats {
-        // 简化实现：返回默认统计信息
-        DatabaseStats::default()
+    pub async fn get_stats(&self) -> DatabaseStats {
+        // 从存储中获取实际统计信息
+        let storage = self.storage.read().await;
+        if let Ok(count) = storage.count_documents().await {
+            DatabaseStats {
+                document_count: count,
+                ..DatabaseStats::default()
+            }
+        } else {
+            DatabaseStats::default()
+        }
     }
 
     /// 获取配置
@@ -351,7 +359,10 @@ mod tests {
             version: Some("1".to_string()),
             doc_type: Some("test".to_string()),
             package_name: Some("test_package".to_string()),
+            vector: None,
             metadata: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         let doc_id = db.add_document(doc.clone()).await.unwrap();
@@ -367,14 +378,14 @@ mod tests {
         assert!(!results.is_empty());
 
         // 获取统计信息
-        let stats = db.get_stats();
+        let stats = db.get_stats().await;
         assert_eq!(stats.document_count, 1);
 
         // 删除文档
         let deleted = db.delete_document("test1").await.unwrap();
         assert!(deleted);
 
-        let stats = db.get_stats();
+        let stats = db.get_stats().await;
         assert_eq!(stats.document_count, 0);
     }
 
@@ -386,6 +397,7 @@ mod tests {
         let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
 
         // 添加一些测试文档
+        let now = chrono::Utc::now();
         let docs = vec![
             Document {
                 id: "doc1".to_string(),
@@ -395,7 +407,10 @@ mod tests {
                 version: Some("1".to_string()),
                 doc_type: Some("tutorial".to_string()),
                 package_name: Some("rust".to_string()),
+                vector: None,
                 metadata: std::collections::HashMap::new(),
+                created_at: now,
+                updated_at: now,
             },
             Document {
                 id: "doc2".to_string(),
@@ -405,7 +420,10 @@ mod tests {
                 version: Some("1".to_string()),
                 doc_type: Some("guide".to_string()),
                 package_name: Some("python".to_string()),
+                vector: None,
                 metadata: std::collections::HashMap::new(),
+                created_at: now,
+                updated_at: now,
             },
         ];
 

@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     // 创建数据库配置
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./performance_test_data");
-    let mut db = VectorDatabase::new(data_dir, config).await?;
+    let db = VectorDatabase::new(data_dir, config).await?;
     
     // 准备测试数据 - 减少数据量避免HNSW问题
     println!("📦 准备测试数据...");
