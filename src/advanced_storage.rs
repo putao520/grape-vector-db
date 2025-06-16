@@ -89,7 +89,7 @@ impl AdvancedStorage {
         }
 
         let db = sled_config.open()
-            .map_err(|e| VectorDbError::Storage(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to open database: {}", e)))?;
 
         // Initialize column families (trees in Sled)
         let mut trees = HashMap::new();
@@ -104,7 +104,7 @@ impl AdvancedStorage {
 
         for cf_name in cf_names.iter() {
             let tree = db.open_tree(cf_name)
-                .map_err(|e| VectorDbError::Storage(format!("Failed to open tree {}: {}", cf_name, e)))?;
+                .map_err(|e| VectorDbError::StorageError(format!("Failed to open tree {}: {}", cf_name, e)))?;
             trees.insert(cf_name.to_string(), tree);
         }
 
@@ -128,7 +128,7 @@ impl AdvancedStorage {
     /// Get a tree (column family) by name
     pub fn get_tree(&self, name: &str) -> Result<&Tree> {
         self.trees.get(name)
-            .ok_or_else(|| VectorDbError::Storage(format!("Tree {} not found", name)))
+            .ok_or_else(|| VectorDbError::StorageError(format!("Tree {} not found", name)))
     }
 
     /// Store a vector in the database
@@ -162,7 +162,7 @@ impl AdvancedStorage {
             Ok(())
         });
 
-        result.map_err(|e| VectorDbError::Storage(format!("Transaction failed: {:?}", e)))?;
+        result.map_err(|e| VectorDbError::StorageError(format!("Transaction failed: {:?}", e)))?;
 
         // Update statistics
         self.update_stats();
@@ -177,10 +177,10 @@ impl AdvancedStorage {
 
         // Get vector data
         let vector_data = vectors_tree.get(id.as_bytes())
-            .map_err(|e| VectorDbError::Storage(format!("Failed to get vector: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to get vector: {}", e)))?;
 
         let metadata_data = metadata_tree.get(id.as_bytes())
-            .map_err(|e| VectorDbError::Storage(format!("Failed to get metadata: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to get metadata: {}", e)))?;
 
         match (vector_data, metadata_data) {
             (Some(vector_bytes), Some(metadata_bytes)) => {
@@ -214,7 +214,7 @@ impl AdvancedStorage {
             Ok(vector_existed || metadata_existed)
         });
 
-        let deleted = result.map_err(|e| VectorDbError::Storage(format!("Delete transaction failed: {:?}", e)))?;
+        let deleted = result.map_err(|e| VectorDbError::StorageError(format!("Delete transaction failed: {:?}", e)))?;
 
         if deleted {
             self.update_stats();
@@ -232,13 +232,13 @@ impl AdvancedStorage {
 
             // Create backup directory
             std::fs::create_dir_all(&backup_dir)
-                .map_err(|e| VectorDbError::Storage(format!("Failed to create backup directory: {}", e)))?;
+                .map_err(|e| VectorDbError::StorageError(format!("Failed to create backup directory: {}", e)))?;
 
             // Export database to backup directory
             for (key, value, _) in self.db.export() {
                 let backup_file = backup_dir.join(format!("{}.backup", format!("{:x}", key.iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64)))));
                 std::fs::write(backup_file, &value)
-                    .map_err(|e| VectorDbError::Storage(format!("Failed to write backup file: {}", e)))?;
+                    .map_err(|e| VectorDbError::StorageError(format!("Failed to write backup file: {}", e)))?;
             }
 
             // Update backup timestamp in stats
@@ -249,7 +249,7 @@ impl AdvancedStorage {
 
             Ok(backup_id)
         } else {
-            Err(VectorDbError::Storage("Backup path not configured".to_string()))
+            Err(VectorDbError::StorageError("Backup path not configured".to_string()))
         }
     }
 
@@ -259,11 +259,11 @@ impl AdvancedStorage {
         
         // Create checkpoint directory
         std::fs::create_dir_all(checkpoint_dir)
-            .map_err(|e| VectorDbError::Storage(format!("Failed to create checkpoint directory: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to create checkpoint directory: {}", e)))?;
 
         // Flush all pending writes
         self.db.flush()
-            .map_err(|e| VectorDbError::Storage(format!("Failed to flush database: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to flush database: {}", e)))?;
 
         // Use Sled's export functionality instead of copying files
         // This avoids file locking issues
@@ -276,10 +276,10 @@ impl AdvancedStorage {
         
         // Write checkpoint data as a simple format
         let serialized = bincode::serialize(&checkpoint_data)
-            .map_err(|e| VectorDbError::Storage(format!("Failed to serialize checkpoint: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to serialize checkpoint: {}", e)))?;
         
         std::fs::write(checkpoint_file, serialized)
-            .map_err(|e| VectorDbError::Storage(format!("Failed to write checkpoint file: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to write checkpoint file: {}", e)))?;
 
         Ok(())
     }
@@ -288,7 +288,7 @@ impl AdvancedStorage {
     pub fn compact(&self) -> Result<()> {
         // Sled doesn't have explicit compaction, but we can trigger cleanup
         self.db.flush()
-            .map_err(|e| VectorDbError::Storage(format!("Failed to flush during compaction: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to flush during compaction: {}", e)))?;
 
         // Update statistics after compaction
         self.update_stats();
@@ -329,7 +329,7 @@ impl AdvancedStorage {
     /// 刷新数据到磁盘
     pub async fn flush(&self) -> Result<()> {
         self.db.flush_async().await
-            .map_err(|e| VectorDbError::Storage(format!("Failed to flush: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to flush: {}", e)))?;
         Ok(())
     }
     
@@ -351,7 +351,7 @@ impl AdvancedStorage {
                     ids.push(id);
                 }
                 Err(e) => {
-                    return Err(VectorDbError::Storage(format!("Failed to iterate vectors: {}", e)));
+                    return Err(VectorDbError::StorageError(format!("Failed to iterate vectors: {}", e)));
                 }
             }
         }
@@ -397,7 +397,7 @@ impl AdvancedStorage {
             Ok(())
         });
 
-        result.map_err(|e| VectorDbError::Storage(format!("Batch transaction failed: {:?}", e)))?;
+        result.map_err(|e| VectorDbError::StorageError(format!("Batch transaction failed: {:?}", e)))?;
 
         self.update_stats();
         Ok(())
@@ -436,7 +436,7 @@ impl AdvancedStorage {
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
         metadata_tree.insert(key, value)
-            .map_err(|e| VectorDbError::Storage(format!("Failed to put data: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to put data: {}", e)))?;
         Ok(())
     }
 
@@ -444,7 +444,7 @@ impl AdvancedStorage {
     pub fn delete(&self, key: &[u8]) -> Result<bool> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
         let removed = metadata_tree.remove(key)
-            .map_err(|e| VectorDbError::Storage(format!("Failed to delete data: {}", e)))?;
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to delete data: {}", e)))?;
         Ok(removed.is_some())
     }
 }

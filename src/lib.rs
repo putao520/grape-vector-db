@@ -121,6 +121,8 @@ pub mod storage;
 pub mod index;
 pub mod query_engine;
 pub mod performance;
+pub mod advanced_storage;
+pub mod distributed;
 
 // 重新导出主要类型
 pub use types::*;
@@ -128,6 +130,7 @@ pub use storage::{VectorStore, BasicVectorStore};
 pub use index::{VectorIndex, HnswVectorIndex, FaissVectorIndex, FaissIndexType, IndexOptimizer};
 pub use query_engine::{QueryEngine, QueryEngineConfig, QueryOptimizer};
 pub use performance::{PerformanceMonitor, PerformanceMetrics};
+pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
 
 // 为了向后兼容，重新导出errors模块
 pub mod errors {
