@@ -1,0 +1,49 @@
+# Grape Vector Database - Cursor 工作区规则
+
+## 项目概述
+高性能向量数据库，Rust开发，目标替代Qdrant，支持内嵌模式。
+- Phase 1完成：Sled存储引擎、HNSW索引、多种嵌入提供商
+- Phase 2规划：分布式架构(Raft共识)
+
+## 严格规范 (不可违反)
+1. **完整实现**: 严禁TODO、占位符，所有功能必须100%完整
+2. **SOLID原则**: 单一职责、依赖倒置等必须遵循
+3. **异常处理**: 使用Result<T,E>，thiserror + anyhow模式
+4. **变量命名**: 禁用data、info等泛化名称，必须语义明确
+5. **响应语言**: 全部使用简体中文，代码注释中文
+
+## 技术栈
+- 存储: Sled (已从RocksDB迁移)
+- 向量索引: instant-distance (HNSW)
+- 异步: tokio, async-trait
+- 网络: tonic(gRPC) + reqwest
+- 并发: parking_lot, crossbeam, dashmap
+- 错误: thiserror + anyhow
+- 缓存: moka
+
+## 架构模式
+每个功能层抽象为trait:
+```rust
+#[async_trait]
+pub trait StorageBackend: Send + Sync {
+    async fn store_vector(&self, collection: &str, id: &str, vector: &[f32]) -> Result<()>;
+}
+
+#[async_trait] 
+pub trait VectorIndex: Send + Sync {
+    async fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>>;
+}
+```
+
+## 性能目标
+- 插入: >10K QPS
+- 搜索: >40K QPS  
+- 缓存命中率: >85%
+- 二进制量化: 40x加速
+
+## AI助手指导
+1. 深入理解现有架构后再建议
+2. 基于现有实现扩展，避免推倒重来
+3. 生成代码必须能直接编译运行
+4. 包含完整错误处理和中文注释
+5. 第三方库变更需用户确认 
