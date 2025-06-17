@@ -1,6 +1,6 @@
+use moka::sync::Cache;
 use std::sync::Arc;
 use std::time::Duration;
-use moka::sync::Cache;
 
 /// 智能缓存管理器
 pub struct CacheManager {
@@ -27,9 +27,9 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            query_cache_size: 50000,   // 50K 查询
+            query_cache_size: 50000,      // 50K 查询
             embedding_cache_size: 100000, // 100K 嵌入
-            ttl_seconds: 1800,         // 30分钟
+            ttl_seconds: 1800,            // 30分钟
             enable_warm_up: true,
         }
     }
@@ -41,14 +41,14 @@ impl CacheManager {
             Cache::builder()
                 .max_capacity(config.query_cache_size)
                 .time_to_live(Duration::from_secs(config.ttl_seconds))
-                .build()
+                .build(),
         );
 
         let embedding_cache = Arc::new(
             Cache::builder()
                 .max_capacity(config.embedding_cache_size)
                 .time_to_live(Duration::from_secs(config.ttl_seconds))
-                .build()
+                .build(),
         );
 
         Self {
@@ -96,4 +96,4 @@ pub struct CacheStats {
     pub embedding_cache_size: u64,
     pub query_hit_ratio: f64,
     pub embedding_hit_ratio: f64,
-} 
+}

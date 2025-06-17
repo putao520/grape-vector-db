@@ -1,18 +1,17 @@
+use anyhow::Result;
 /// 测试节点抽象
-/// 
+///
 /// 封装单个节点的功能，支持不同的运行模式和状态管理
-
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use anyhow::Result;
 use uuid::Uuid;
 
 use crate::test_framework::ClusterType;
-use grape_vector_db::types::*;
-use grape_vector_db::distributed::raft::{RaftNode, RaftConfig, RaftState};
-use grape_vector_db::distributed::shard::{ShardManager, ShardConfig};
 use grape_vector_db::advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
+use grape_vector_db::distributed::raft::{RaftConfig, RaftNode, RaftState};
+use grape_vector_db::distributed::shard::{ShardConfig, ShardManager};
+use grape_vector_db::types::*;
 
 /// 测试节点
 pub struct TestNode {
@@ -62,13 +61,13 @@ impl TestNode {
     /// 创建新的测试节点
     pub async fn new(node_id: String, cluster_type: ClusterType) -> Self {
         let data_dir = format!("/tmp/grape_test_{}", Uuid::new_v4());
-        
+
         // 根据集群类型决定配置
         let (enable_raft, enable_sharding) = match cluster_type {
             ClusterType::Embedded | ClusterType::Standalone => (false, false),
             ClusterType::ThreeNode | ClusterType::SixNode => (true, true),
         };
-        
+
         let config = TestNodeConfig {
             data_dir: data_dir.clone(),
             enable_raft,
@@ -91,7 +90,7 @@ impl TestNode {
                 None
             },
         };
-        
+
         // 创建存储引擎
         let storage_config = AdvancedStorageConfig {
             db_path: data_dir.into(),
@@ -102,12 +101,9 @@ impl TestNode {
             enable_checksums: true,
             max_background_threads: 4,
         };
-        
-        let storage = Arc::new(
-            AdvancedStorage::new(storage_config)
-                .expect("创建存储引擎失败")
-        );
-        
+
+        let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储引擎失败"));
+
         Self {
             node_id,
             cluster_type,
@@ -118,13 +114,13 @@ impl TestNode {
             config,
         }
     }
-    
+
     /// 启动节点
     pub async fn start(&self) -> Result<()> {
         let mut state = self.state.write().await;
         *state = TestNodeState::Starting;
         drop(state);
-        
+
         // 启动Raft节点（如果启用）
         if self.config.enable_raft {
             if let Some(raft_config) = &self.config.raft_config {
@@ -133,7 +129,7 @@ impl TestNode {
                 // raft_node.start().await?;
             }
         }
-        
+
         // 启动分片管理器（如果启用）
         if self.config.enable_sharding {
             if let Some(shard_config) = &self.config.shard_config {
@@ -146,35 +142,35 @@ impl TestNode {
                 // shard_manager.start().await?;
             }
         }
-        
+
         let mut state = self.state.write().await;
         *state = TestNodeState::Running;
-        
+
         Ok(())
     }
-    
+
     /// 停止节点
     pub async fn stop(&self) -> Result<()> {
         let mut state = self.state.write().await;
         *state = TestNodeState::Stopping;
         drop(state);
-        
+
         // 停止Raft节点
         if let Some(raft_node) = &self.raft_node {
             // raft_node.stop().await?;
         }
-        
+
         // 停止分片管理器
         if let Some(shard_manager) = &self.shard_manager {
             // shard_manager.stop().await?;
         }
-        
+
         let mut state = self.state.write().await;
         *state = TestNodeState::Stopped;
-        
+
         Ok(())
     }
-    
+
     /// 重启节点
     pub async fn restart(&self) -> Result<()> {
         self.stop().await?;
@@ -182,12 +178,12 @@ impl TestNode {
         self.start().await?;
         Ok(())
     }
-    
+
     /// 获取节点ID
     pub fn node_id(&self) -> &str {
         &self.node_id
     }
-    
+
     /// 检查节点是否为领导者
     pub async fn is_leader(&self) -> bool {
         if let Some(raft_node) = &self.raft_node {
@@ -196,7 +192,7 @@ impl TestNode {
         }
         false
     }
-    
+
     /// 检查节点是否为跟随者
     pub async fn is_follower(&self) -> bool {
         if let Some(_raft_node) = &self.raft_node {
@@ -204,18 +200,18 @@ impl TestNode {
         }
         false
     }
-    
+
     /// 检查节点是否在运行
     pub async fn is_running(&self) -> bool {
         let state = self.state.read().await;
         *state == TestNodeState::Running
     }
-    
+
     /// 获取节点状态
     pub async fn get_state(&self) -> TestNodeState {
         self.state.read().await.clone()
     }
-    
+
     /// 提议日志条目
     pub async fn propose_entry(&self, entry: Vec<u8>) -> Result<()> {
         if let Some(raft_node) = &self.raft_node {
@@ -227,7 +223,7 @@ impl TestNode {
             anyhow::bail!("节点未启用Raft")
         }
     }
-    
+
     /// 获取节点日志
     pub async fn get_logs(&self) -> Vec<Vec<u8>> {
         if let Some(_raft_node) = &self.raft_node {
@@ -238,40 +234,40 @@ impl TestNode {
             vec![]
         }
     }
-    
+
     /// 插入文档
     pub async fn insert_document(&self, document: Document) -> Result<String> {
         // 检查节点是否运行
         if !self.is_running().await {
             anyhow::bail!("节点未运行");
         }
-        
+
         // 模拟文档插入
         let doc_id = document.id.clone();
-        
+
         // 在集群模式下，通过Raft提议变更
         if self.config.enable_raft {
             let entry = serde_json::to_vec(&document)?;
             self.propose_entry(entry).await?;
         }
-        
+
         // 存储到本地
         // 简化实现：实际应该通过存储引擎存储
         tokio::time::sleep(Duration::from_millis(5)).await; // 模拟存储延迟
-        
+
         Ok(doc_id)
     }
-    
+
     /// 获取文档
     pub async fn get_document(&self, doc_id: &str) -> Result<Document> {
         // 检查节点是否运行
         if !self.is_running().await {
             anyhow::bail!("节点未运行");
         }
-        
+
         // 模拟文档检索
         tokio::time::sleep(Duration::from_millis(2)).await; // 模拟查询延迟
-        
+
         // 简化实现：返回模拟文档
         Ok(Document {
             id: doc_id.to_string(),
@@ -287,54 +283,54 @@ impl TestNode {
             updated_at: chrono::Utc::now(),
         })
     }
-    
+
     /// 获取节点ID
     pub fn get_id(&self) -> &str {
         &self.node_id
     }
-    
+
     /// 获取节点配置
     pub fn get_config(&self) -> &TestNodeConfig {
         &self.config
     }
-    
+
     /// 获取存储引擎
     pub fn get_storage(&self) -> Arc<AdvancedStorage> {
         self.storage.clone()
     }
-    
+
     /// 模拟节点故障
     pub async fn simulate_failure(&self) -> Result<()> {
         let mut state = self.state.write().await;
         *state = TestNodeState::Failed;
         Ok(())
     }
-    
+
     /// 从故障中恢复
     pub async fn recover_from_failure(&self) -> Result<()> {
         let mut state = self.state.write().await;
         *state = TestNodeState::Recovering;
         drop(state);
-        
+
         // 模拟恢复过程
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         let mut state = self.state.write().await;
         *state = TestNodeState::Running;
-        
+
         Ok(())
     }
-    
+
     /// 获取节点健康状态
     pub async fn get_health_status(&self) -> NodeHealthStatus {
         let state = self.state.read().await;
-        
+
         NodeHealthStatus {
             node_id: self.node_id.clone(),
             is_running: *state == TestNodeState::Running,
             is_leader: self.is_leader().await,
             last_heartbeat: chrono::Utc::now(),
-            memory_usage_mb: 64, // 模拟内存使用
+            memory_usage_mb: 64,     // 模拟内存使用
             cpu_usage_percent: 10.0, // 模拟CPU使用
         }
     }
@@ -390,44 +386,44 @@ pub fn generate_test_documents(count: usize) -> Vec<Document> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_node_creation() {
         let node = TestNode::new("test_node".to_string(), ClusterType::ThreeNode).await;
         assert_eq!(node.node_id(), "test_node");
         assert_eq!(node.get_state().await, TestNodeState::Stopped);
     }
-    
+
     #[tokio::test]
     async fn test_node_lifecycle() {
         let node = TestNode::new("test_node".to_string(), ClusterType::ThreeNode).await;
-        
+
         // 启动节点
         node.start().await.unwrap();
         assert_eq!(node.get_state().await, TestNodeState::Running);
         assert!(node.is_running().await);
-        
+
         // 停止节点
         node.stop().await.unwrap();
         assert_eq!(node.get_state().await, TestNodeState::Stopped);
         assert!(!node.is_running().await);
-        
+
         // 重启节点
         node.restart().await.unwrap();
         assert_eq!(node.get_state().await, TestNodeState::Running);
         assert!(node.is_running().await);
     }
-    
+
     #[tokio::test]
     async fn test_document_operations() {
         let node = TestNode::new("test_node".to_string(), ClusterType::Standalone).await;
         node.start().await.unwrap();
-        
+
         // 插入文档
         let doc = create_test_document();
         let doc_id = node.insert_document(doc.clone()).await.unwrap();
         assert_eq!(doc_id, doc.id);
-        
+
         // 获取文档
         let retrieved = node.get_document(&doc_id).await.unwrap();
         assert_eq!(retrieved.id, doc_id);

@@ -1,14 +1,14 @@
 pub mod cache_manager;
-pub mod search_optimizer;
-pub mod parallel_search;
-pub mod index_optimizer;
 pub mod concurrent_test;
+pub mod index_optimizer;
+pub mod parallel_search;
+pub mod search_optimizer;
 
 // 重新导出主要类型
-pub use cache_manager::{CacheManager, CacheConfig, CacheStats};
-pub use search_optimizer::{SearchOptimizer, SearchOptimizerConfig};
-pub use parallel_search::{ParallelSearchExecutor, ParallelSearchConfig};
+pub use cache_manager::{CacheConfig, CacheManager, CacheStats};
 pub use index_optimizer::{IndexOptimizer, IndexOptimizerConfig, OptimizationStats};
+pub use parallel_search::{ParallelSearchConfig, ParallelSearchExecutor};
+pub use search_optimizer::{SearchOptimizer, SearchOptimizerConfig};
 
 #[cfg(test)]
 pub use concurrent_test::ConcurrentPerformanceTest;
@@ -46,14 +46,14 @@ impl PerformanceMonitor {
     pub fn record_query(&self, duration_ms: f64) {
         let mut stats = self.stats.write();
         stats.total_queries += 1;
-        
+
         // 计算移动平均
         if stats.total_queries == 1 {
             stats.average_query_time_ms = duration_ms;
         } else {
-            stats.average_query_time_ms = 
-                (stats.average_query_time_ms * (stats.total_queries - 1) as f64 + duration_ms) 
-                / stats.total_queries as f64;
+            stats.average_query_time_ms =
+                (stats.average_query_time_ms * (stats.total_queries - 1) as f64 + duration_ms)
+                    / stats.total_queries as f64;
         }
     }
 
@@ -90,4 +90,4 @@ impl Default for PerformanceMonitor {
 }
 
 // 为了兼容性，创建别名
-pub type PerformanceMetrics = PerformanceStats; 
+pub type PerformanceMetrics = PerformanceStats;

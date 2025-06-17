@@ -1,13 +1,12 @@
 //! 融合策略基准测试示例
-//! 
+//!
 //! 此示例演示如何使用不同的融合策略进行性能基准测试
 
 use grape_vector_db::{
-    VectorDatabase, VectorDbConfig, 
+    benchmark::{BenchmarkConfig, BenchmarkSuite},
+    hybrid::{FusionModel, StatisticalFusionModel},
     types::{Document, FusionStrategy, FusionWeights, HybridSearchRequest},
-    benchmark::{BenchmarkSuite, BenchmarkConfig},
-    hybrid::{StatisticalFusionModel, FusionModel},
-    FusionContext, QueryType, TimeContext,
+    FusionContext, QueryType, TimeContext, VectorDatabase, VectorDbConfig,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,12 +14,12 @@ use std::path::PathBuf;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Grape Vector DB - 融合策略基准测试演示");
-    
-    // 1. 初始化数据库 
+
+    // 1. 初始化数据库
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./temp_demo_db");
     let mut db = VectorDatabase::new(data_dir, config).await?;
-    
+
     // 2. 准备测试数据
     let test_documents = generate_test_documents();
     println!("📚 生成了 {} 个测试文档", test_documents.len());
@@ -29,15 +28,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for doc in &test_documents {
         db.add_document(doc.clone()).await?;
     }
-    
+
     // 更新词汇表（BM25算法需要）
     db.update_vocabulary().await?;
-    
+
     // 等待词汇表完全初始化
     std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
     println!("✅ 文档插入完成，词汇表已更新");
-    
+
     // 验证混合搜索是否可用
     println!("🔍 验证混合搜索功能...");
     let test_request = HybridSearchRequest {
@@ -49,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sparse_weight: 0.3,
         text_weight: 0.2,
     };
-    
+
     match db.advanced_hybrid_search(test_request).await {
         Ok(_) => println!("✅ 混合搜索功能正常"),
         Err(e) => {
@@ -57,10 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(e.into());
         }
     }
-    
+
     // 3. 测试不同的融合策略
     println!("\n🎯 开始融合策略性能测试...\n");
-    
+
     let strategies = vec![
         ("RRF_模拟", 0.5, 0.3, 0.2),
         ("线性_平衡", 0.5, 0.3, 0.2),
@@ -70,35 +69,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("学习式模拟", 0.55, 0.35, 0.1),
         ("自适应模拟", 0.65, 0.25, 0.1),
     ];
-    
+
     let mut all_results = Vec::new();
-    
+
     for (name, dense_weight, sparse_weight, text_weight) in strategies {
         println!("📊 测试策略: {}", name);
-        
+
         // 使用相同的数据库但不同的权重配置运行测试
         let result = run_simple_benchmark_with_weights(
-            &db, 
-            name, 
+            &db,
+            name,
             &test_documents,
             dense_weight,
             sparse_weight,
-            text_weight
-        ).await?;
+            text_weight,
+        )
+        .await?;
         all_results.push(result);
-        
+
         println!("   ✓ 完成");
     }
-    
+
     // 5. 分析结果
     println!("\n📈 基准测试结果分析:\n");
-    
+
     print_benchmark_results(&all_results);
-    
+
     // 6. 演示学习式融合模型
     println!("\n🧠 学习式融合模型演示:");
     demonstrate_learning_model()?;
-    
+
     println!("\n🎉 基准测试演示完成!");
     Ok(())
 }
@@ -215,15 +215,15 @@ async fn run_simple_benchmark_with_weights(
         "搜索引擎技术",
         "分布式系统架构",
     ];
-    
+
     let start_time = std::time::Instant::now();
     let mut latencies = Vec::new();
     let mut successful_queries = 0;
     let mut total_precision = 0.0;
-    
+
     for query in test_queries.iter() {
         let query_start = std::time::Instant::now();
-        
+
         // 执行混合搜索，使用自定义权重
         let request = HybridSearchRequest {
             dense_vector: None,
@@ -234,16 +234,18 @@ async fn run_simple_benchmark_with_weights(
             sparse_weight,
             text_weight,
         };
-        
+
         match db.advanced_hybrid_search(request).await {
             Ok(results) => {
                 let latency = query_start.elapsed().as_millis() as f64;
                 latencies.push(latency);
                 successful_queries += 1;
-                
+
                 // 简单的精确度计算（基于结果数量）
-                let precision = if results.is_empty() { 0.0 } else { 
-                    (results.len() as f64 / 5.0).min(1.0) 
+                let precision = if results.is_empty() {
+                    0.0
+                } else {
+                    (results.len() as f64 / 5.0).min(1.0)
                 };
                 total_precision += precision;
             }
@@ -252,13 +254,13 @@ async fn run_simple_benchmark_with_weights(
             }
         }
     }
-    
+
     let total_time = start_time.elapsed();
     let avg_latency = latencies.iter().sum::<f64>() / latencies.len() as f64;
     let throughput = successful_queries as f64 / total_time.as_secs_f64();
     let success_rate = successful_queries as f64 / test_queries.len() as f64;
     let avg_precision = total_precision / test_queries.len() as f64;
-    
+
     Ok(SimpleBenchmarkResult {
         strategy_name: strategy_name.to_string(),
         avg_latency_ms: avg_latency,
@@ -273,9 +275,10 @@ fn print_benchmark_results(results: &[SimpleBenchmarkResult]) {
     println!("┌─────────────────┬──────────────┬──────────────┬─────────────┬──────────────┐");
     println!("│ 策略            │ 平均延迟(ms) │ 吞吐量(QPS)  │ 成功率      │ 样本精确度   │");
     println!("├─────────────────┼──────────────┼──────────────┼─────────────┼──────────────┤");
-    
+
     for result in results {
-        println!("│ {:15} │ {:12.2} │ {:12.2} │ {:11.1}% │ {:12.3} │",
+        println!(
+            "│ {:15} │ {:12.2} │ {:12.2} │ {:11.1}% │ {:12.3} │",
             result.strategy_name,
             result.avg_latency_ms,
             result.throughput_qps,
@@ -283,35 +286,50 @@ fn print_benchmark_results(results: &[SimpleBenchmarkResult]) {
             result.sample_precision
         );
     }
-    
+
     println!("└─────────────────┴──────────────┴──────────────┴─────────────┴──────────────┘");
-    
+
     // 找出最佳性能指标
-    if let Some(best_latency) = results.iter().min_by(|a, b| 
-        a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap()) {
-        println!("\n🏆 最低延迟: {} ({:.2}ms)", best_latency.strategy_name, best_latency.avg_latency_ms);
+    if let Some(best_latency) = results
+        .iter()
+        .min_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap())
+    {
+        println!(
+            "\n🏆 最低延迟: {} ({:.2}ms)",
+            best_latency.strategy_name, best_latency.avg_latency_ms
+        );
     }
-    
-    if let Some(best_throughput) = results.iter().max_by(|a, b| 
-        a.throughput_qps.partial_cmp(&b.throughput_qps).unwrap()) {
-        println!("🏆 最高吞吐量: {} ({:.2} QPS)", best_throughput.strategy_name, best_throughput.throughput_qps);
+
+    if let Some(best_throughput) = results
+        .iter()
+        .max_by(|a, b| a.throughput_qps.partial_cmp(&b.throughput_qps).unwrap())
+    {
+        println!(
+            "🏆 最高吞吐量: {} ({:.2} QPS)",
+            best_throughput.strategy_name, best_throughput.throughput_qps
+        );
     }
-    
-    if let Some(best_precision) = results.iter().max_by(|a, b| 
-        a.sample_precision.partial_cmp(&b.sample_precision).unwrap()) {
-        println!("🏆 最高精确度: {} ({:.3})", best_precision.strategy_name, best_precision.sample_precision);
+
+    if let Some(best_precision) = results
+        .iter()
+        .max_by(|a, b| a.sample_precision.partial_cmp(&b.sample_precision).unwrap())
+    {
+        println!(
+            "🏆 最高精确度: {} ({:.3})",
+            best_precision.strategy_name, best_precision.sample_precision
+        );
     }
 }
 
 /// 演示学习式融合模型
 fn demonstrate_learning_model() -> Result<(), Box<dyn std::error::Error>> {
     println!("  创建统计学习模型...");
-    
+
     let mut model = StatisticalFusionModel::new(0.01);
-    
+
     // 模拟一些训练数据
     use grape_vector_db::types::QueryMetrics;
-    
+
     let training_data = vec![
         QueryMetrics {
             query_id: "test_query_1".to_string(),
@@ -334,12 +352,12 @@ fn demonstrate_learning_model() -> Result<(), Box<dyn std::error::Error>> {
             fusion_strategy: "learned".to_string(),
         },
     ];
-    
+
     // 训练模型
     for metrics in training_data {
         model.update_model(&metrics)?;
     }
-    
+
     // 测试预测
     let test_context = FusionContext {
         query_type: QueryType::Semantic,
@@ -347,13 +365,13 @@ fn demonstrate_learning_model() -> Result<(), Box<dyn std::error::Error>> {
         historical_ctr: 0.75,
         time_context: TimeContext::WorkingHours,
     };
-    
+
     let predicted_weights = model.predict_weights("深度学习技术", &test_context);
-    
+
     println!("  📊 预测的最佳权重:");
     println!("    - 密集向量权重: {:.3}", predicted_weights.dense_weight);
     println!("    - 稀疏向量权重: {:.3}", predicted_weights.sparse_weight);
     println!("    - 文本搜索权重: {:.3}", predicted_weights.text_weight);
-    
+
     Ok(())
-} 
+}

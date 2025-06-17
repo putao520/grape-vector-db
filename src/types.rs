@@ -25,16 +25,20 @@ pub struct SparseVector {
 
 impl SparseVector {
     /// 创建新的稀疏向量
-    pub fn new(indices: Vec<u32>, values: Vec<f32>, dimension: usize) -> Result<Self, VectorDbError> {
+    pub fn new(
+        indices: Vec<u32>,
+        values: Vec<f32>,
+        dimension: usize,
+    ) -> Result<Self, VectorDbError> {
         if indices.len() != values.len() {
             return Err(VectorDbError::ConfigError(
-                "稀疏向量的索引和值数量不匹配".to_string()
+                "稀疏向量的索引和值数量不匹配".to_string(),
             ));
         }
-        
+
         if indices.iter().any(|&i| i as usize >= dimension) {
             return Err(VectorDbError::ConfigError(
-                "稀疏向量索引超出维度范围".to_string()
+                "稀疏向量索引超出维度范围".to_string(),
             ));
         }
 
@@ -75,7 +79,7 @@ impl SparseVector {
     pub fn cosine_similarity(&self, other: &SparseVector) -> f32 {
         let dot = self.dot_product(other);
         let norm_product = self.norm() * other.norm();
-        
+
         if norm_product == 0.0 {
             0.0
         } else {
@@ -165,10 +169,7 @@ pub enum Filter {
     /// 不能匹配的条件
     MustNot(Vec<Condition>),
     /// 嵌套过滤器
-    Nested {
-        path: String,
-        filter: Box<Filter>,
-    },
+    Nested { path: String, filter: Box<Filter> },
 }
 
 /// 过滤条件
@@ -186,10 +187,7 @@ pub enum Condition {
         lte: Option<serde_json::Value>,
     },
     /// 字段匹配某个模式
-    Match {
-        field: String,
-        text: String,
-    },
+    Match { field: String, text: String },
 }
 
 /// 混合搜索请求
@@ -217,16 +215,16 @@ pub enum FusionStrategy {
     /// 倒数排名融合 (Reciprocal Rank Fusion)
     RRF { k: f32 },
     /// 线性权重融合
-    Linear { 
-        dense_weight: f32, 
+    Linear {
+        dense_weight: f32,
         sparse_weight: f32,
-        text_weight: f32 
+        text_weight: f32,
     },
     /// 标准化分数融合
     Normalized {
         dense_weight: f32,
-        sparse_weight: f32, 
-        text_weight: f32
+        sparse_weight: f32,
+        text_weight: f32,
     },
     /// 学习式融合 - 基于统计的动态权重
     Learned {
@@ -766,40 +764,40 @@ pub enum QueryResponse {
 pub enum VectorDbError {
     #[error("存储错误: {0}")]
     StorageError(String),
-    
+
     #[error("序列化错误: {0}")]
     SerializationError(String),
-    
+
     #[error("网络错误: {0}")]
     NetworkError(String),
-    
+
     #[error("配置错误: {0}")]
     ConfigError(String),
-    
+
     #[error("索引错误: {0}")]
     IndexError(String),
-    
+
     #[error("查询错误: {0}")]
     QueryError(String),
-    
+
     #[error("文档未找到: {0}")]
     DocumentNotFound(String),
-    
+
     #[error("无效的向量维度")]
     InvalidVectorDimension,
-    
+
     #[error("索引未构建")]
     IndexNotBuilt,
-    
+
     #[error("维度不匹配: 期望 {expected}, 实际 {actual}")]
     DimensionMismatch { expected: usize, actual: usize },
-    
+
     #[error("索引构建错误: {0}")]
     IndexBuildError(String),
-    
+
     #[error("运行时错误: {0}")]
     RuntimeError(String),
-    
+
     #[error("功能未实现: {0}")]
     NotImplemented(String),
 }
@@ -880,4 +878,4 @@ impl Default for EmbeddingConfig {
             api_version: None,
         }
     }
-} 
+}

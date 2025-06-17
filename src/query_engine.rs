@@ -1,9 +1,9 @@
-use crate::types::{SearchResult, VectorDbError, QueryRequest, QueryResponse};
-use crate::storage::{VectorStore};
-use crate::index::{VectorIndex};
+use crate::index::VectorIndex;
+use crate::storage::VectorStore;
+use crate::types::{QueryRequest, QueryResponse, SearchResult, VectorDbError};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 /// 查询引擎配置
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl QueryEngine {
             Some(
                 moka::future::Cache::builder()
                     .max_capacity(config.cache_size as u64)
-                    .build()
+                    .build(),
             )
         } else {
             None
@@ -75,18 +75,38 @@ impl QueryEngine {
     }
 
     /// 执行查询
-    pub async fn execute_query(&self, request: QueryRequest) -> Result<QueryResponse, VectorDbError> {
+    pub async fn execute_query(
+        &self,
+        request: QueryRequest,
+    ) -> Result<QueryResponse, VectorDbError> {
         match request {
-            QueryRequest::VectorSearch { query_vector, limit, threshold } => {
-                let results = self.vector_search(&query_vector, Some(limit), threshold).await?;
+            QueryRequest::VectorSearch {
+                query_vector,
+                limit,
+                threshold,
+            } => {
+                let results = self
+                    .vector_search(&query_vector, Some(limit), threshold)
+                    .await?;
                 Ok(QueryResponse::SearchResults(results))
             }
-            QueryRequest::TextSearch { query, limit, filters } => {
+            QueryRequest::TextSearch {
+                query,
+                limit,
+                filters,
+            } => {
                 let results = self.text_search(&query, Some(limit), filters).await?;
                 Ok(QueryResponse::SearchResults(results))
             }
-            QueryRequest::HybridSearch { query, query_vector, limit, alpha } => {
-                let results = self.hybrid_search(&query, query_vector.as_deref(), Some(limit), alpha).await?;
+            QueryRequest::HybridSearch {
+                query,
+                query_vector,
+                limit,
+                alpha,
+            } => {
+                let results = self
+                    .hybrid_search(&query, query_vector.as_deref(), Some(limit), alpha)
+                    .await?;
                 Ok(QueryResponse::SearchResults(results))
             }
         }
@@ -112,7 +132,9 @@ impl QueryEngine {
 
         let results = {
             let storage = self.storage.read().await;
-            storage.vector_search(query_vector, limit, threshold).await?
+            storage
+                .vector_search(query_vector, limit, threshold)
+                .await?
         };
 
         // 缓存结果
@@ -174,7 +196,9 @@ impl QueryEngine {
 
         let results = {
             let storage = self.storage.read().await;
-            storage.hybrid_search(query, query_vector, limit, alpha).await?
+            storage
+                .hybrid_search(query, query_vector, limit, alpha)
+                .await?
         };
 
         // 缓存结果
@@ -255,48 +279,96 @@ impl QueryOptimizer {
     /// 应用单个优化规则
     fn apply_rule(&self, request: QueryRequest, rule: &OptimizationRule) -> QueryRequest {
         match rule {
-            OptimizationRule::LimitMaxResults { max_limit } => {
-                match request {
-                    QueryRequest::VectorSearch { query_vector, limit, threshold } => {
-                        let new_limit = limit.min(*max_limit);
-                        QueryRequest::VectorSearch { query_vector, limit: new_limit, threshold }
-                    }
-                    QueryRequest::TextSearch { query, limit, filters } => {
-                        let new_limit = limit.min(*max_limit);
-                        QueryRequest::TextSearch { query, limit: new_limit, filters }
-                    }
-                    QueryRequest::HybridSearch { query, query_vector, limit, alpha } => {
-                        let new_limit = limit.min(*max_limit);
-                        QueryRequest::HybridSearch { query, query_vector, limit: new_limit, alpha }
+            OptimizationRule::LimitMaxResults { max_limit } => match request {
+                QueryRequest::VectorSearch {
+                    query_vector,
+                    limit,
+                    threshold,
+                } => {
+                    let new_limit = limit.min(*max_limit);
+                    QueryRequest::VectorSearch {
+                        query_vector,
+                        limit: new_limit,
+                        threshold,
                     }
                 }
-            }
-            OptimizationRule::MinSimilarityThreshold { min_threshold } => {
-                match request {
-                    QueryRequest::VectorSearch { query_vector, limit, threshold } => {
-                        let new_threshold = threshold.map(|t| t.max(*min_threshold)).or(Some(*min_threshold));
-                        QueryRequest::VectorSearch { query_vector, limit, threshold: new_threshold }
+                QueryRequest::TextSearch {
+                    query,
+                    limit,
+                    filters,
+                } => {
+                    let new_limit = limit.min(*max_limit);
+                    QueryRequest::TextSearch {
+                        query,
+                        limit: new_limit,
+                        filters,
                     }
-                    _ => request,
                 }
-            }
-            OptimizationRule::QueryRewrite { patterns } => {
-                match request {
-                    QueryRequest::TextSearch { mut query, limit, filters } => {
-                        for (pattern, replacement) in patterns {
-                            query = query.replace(pattern, replacement);
-                        }
-                        QueryRequest::TextSearch { query, limit, filters }
+                QueryRequest::HybridSearch {
+                    query,
+                    query_vector,
+                    limit,
+                    alpha,
+                } => {
+                    let new_limit = limit.min(*max_limit);
+                    QueryRequest::HybridSearch {
+                        query,
+                        query_vector,
+                        limit: new_limit,
+                        alpha,
                     }
-                    QueryRequest::HybridSearch { mut query, query_vector, limit, alpha } => {
-                        for (pattern, replacement) in patterns {
-                            query = query.replace(pattern, replacement);
-                        }
-                        QueryRequest::HybridSearch { query, query_vector, limit, alpha }
-                    }
-                    _ => request,
                 }
-            }
+            },
+            OptimizationRule::MinSimilarityThreshold { min_threshold } => match request {
+                QueryRequest::VectorSearch {
+                    query_vector,
+                    limit,
+                    threshold,
+                } => {
+                    let new_threshold = threshold
+                        .map(|t| t.max(*min_threshold))
+                        .or(Some(*min_threshold));
+                    QueryRequest::VectorSearch {
+                        query_vector,
+                        limit,
+                        threshold: new_threshold,
+                    }
+                }
+                _ => request,
+            },
+            OptimizationRule::QueryRewrite { patterns } => match request {
+                QueryRequest::TextSearch {
+                    mut query,
+                    limit,
+                    filters,
+                } => {
+                    for (pattern, replacement) in patterns {
+                        query = query.replace(pattern, replacement);
+                    }
+                    QueryRequest::TextSearch {
+                        query,
+                        limit,
+                        filters,
+                    }
+                }
+                QueryRequest::HybridSearch {
+                    mut query,
+                    query_vector,
+                    limit,
+                    alpha,
+                } => {
+                    for (pattern, replacement) in patterns {
+                        query = query.replace(pattern, replacement);
+                    }
+                    QueryRequest::HybridSearch {
+                        query,
+                        query_vector,
+                        limit,
+                        alpha,
+                    }
+                }
+                _ => request,
+            },
         }
     }
 }
@@ -305,4 +377,4 @@ impl Default for QueryOptimizer {
     fn default() -> Self {
         Self::new()
     }
-} 
+}

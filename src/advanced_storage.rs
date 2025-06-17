@@ -1,14 +1,17 @@
 // Advanced Storage Engine Module (Sled-based)
 // Week 9-10: Storage Engine Upgrade
 
+use crate::errors::{Result, VectorDbError};
+use crate::types::{Point, SearchResult};
+use serde::{Deserialize, Serialize};
+use sled::{
+    transaction::{TransactionError, TransactionResult, Transactional},
+    Db, IVec, Tree,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH, Instant};
-use serde::{Deserialize, Serialize};
-use sled::{Db, Tree, IVec, transaction::{TransactionResult, TransactionError, Transactional}};
-use crate::errors::{Result, VectorDbError};
-use crate::types::{Point, SearchResult};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Advanced storage configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,15 +85,16 @@ impl AdvancedStorage {
             .path(&config.db_path)
             .cache_capacity(config.cache_size as u64)
             .flush_every_ms(Some(config.flush_interval_ms));
-            // Disable compression for now to avoid Sled feature issues
-            // .use_compression(config.enable_compression);
+        // Disable compression for now to avoid Sled feature issues
+        // .use_compression(config.enable_compression);
 
         // Removing checksum-based compression for now
         // if config.enable_checksums {
         //     sled_config = sled_config.use_compression(true);
         // }
 
-        let db = sled_config.open()
+        let db = sled_config
+            .open()
             .map_err(|e| VectorDbError::StorageError(format!("Failed to open database: {}", e)))?;
 
         // Initialize column families (trees in Sled)
@@ -105,8 +109,9 @@ impl AdvancedStorage {
         ];
 
         for cf_name in cf_names.iter() {
-            let tree = db.open_tree(cf_name)
-                .map_err(|e| VectorDbError::StorageError(format!("Failed to open tree {}: {}", cf_name, e)))?;
+            let tree = db.open_tree(cf_name).map_err(|e| {
+                VectorDbError::StorageError(format!("Failed to open tree {}: {}", cf_name, e))
+            })?;
             trees.insert(cf_name.to_string(), tree);
         }
 
@@ -129,7 +134,8 @@ impl AdvancedStorage {
 
     /// Get a tree (column family) by name
     pub fn get_tree(&self, name: &str) -> Result<&Tree> {
-        self.trees.get(name)
+        self.trees
+            .get(name)
             .ok_or_else(|| VectorDbError::StorageError(format!("Tree {} not found", name)))
     }
 
@@ -139,30 +145,40 @@ impl AdvancedStorage {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
         // Serialize vector data
-        let vector_data = bincode::serialize(&point.vector)
-            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize vector: {}", e)))?;
+        let vector_data = bincode::serialize(&point.vector).map_err(|e| {
+            VectorDbError::SerializationError(format!("Failed to serialize vector: {}", e))
+        })?;
 
         // Serialize metadata
-        let payload_json = serde_json::to_string(&point.payload)
-            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize payload: {}", e)))?;
-        
+        let payload_json = serde_json::to_string(&point.payload).map_err(|e| {
+            VectorDbError::SerializationError(format!("Failed to serialize payload: {}", e))
+        })?;
+
         let metadata = VectorMetadata {
             id: point.id.clone(),
             dimension: point.vector.len(),
             payload_json,
-            created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            updated_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            updated_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
         };
 
-        let metadata_data = bincode::serialize(&metadata)
-            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize metadata: {}", e)))?;
+        let metadata_data = bincode::serialize(&metadata).map_err(|e| {
+            VectorDbError::SerializationError(format!("Failed to serialize metadata: {}", e))
+        })?;
 
         // Use transaction for atomic writes
-        let result: TransactionResult<(), ()> = (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
-            vectors_tx.insert(point.id.as_bytes(), vector_data.clone())?;
-            metadata_tx.insert(point.id.as_bytes(), metadata_data.clone())?;
-            Ok(())
-        });
+        let result: TransactionResult<(), ()> =
+            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+                vectors_tx.insert(point.id.as_bytes(), vector_data.clone())?;
+                metadata_tx.insert(point.id.as_bytes(), metadata_data.clone())?;
+                Ok(())
+            });
 
         result.map_err(|e| VectorDbError::StorageError(format!("Transaction failed: {:?}", e)))?;
 
@@ -178,22 +194,38 @@ impl AdvancedStorage {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
         // Get vector data
-        let vector_data = vectors_tree.get(id.as_bytes())
+        let vector_data = vectors_tree
+            .get(id.as_bytes())
             .map_err(|e| VectorDbError::StorageError(format!("Failed to get vector: {}", e)))?;
 
-        let metadata_data = metadata_tree.get(id.as_bytes())
+        let metadata_data = metadata_tree
+            .get(id.as_bytes())
             .map_err(|e| VectorDbError::StorageError(format!("Failed to get metadata: {}", e)))?;
 
         match (vector_data, metadata_data) {
             (Some(vector_bytes), Some(metadata_bytes)) => {
-                let vector: Vec<f32> = bincode::deserialize(&vector_bytes)
-                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize vector: {}", e)))?;
+                let vector: Vec<f32> = bincode::deserialize(&vector_bytes).map_err(|e| {
+                    VectorDbError::SerializationError(format!(
+                        "Failed to deserialize vector: {}",
+                        e
+                    ))
+                })?;
 
-                let metadata: VectorMetadata = bincode::deserialize(&metadata_bytes)
-                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize metadata: {}", e)))?;
+                let metadata: VectorMetadata =
+                    bincode::deserialize(&metadata_bytes).map_err(|e| {
+                        VectorDbError::SerializationError(format!(
+                            "Failed to deserialize metadata: {}",
+                            e
+                        ))
+                    })?;
 
-                let payload: HashMap<String, serde_json::Value> = serde_json::from_str(&metadata.payload_json)
-                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize payload JSON: {}", e)))?;
+                let payload: HashMap<String, serde_json::Value> =
+                    serde_json::from_str(&metadata.payload_json).map_err(|e| {
+                        VectorDbError::SerializationError(format!(
+                            "Failed to deserialize payload JSON: {}",
+                            e
+                        ))
+                    })?;
 
                 Ok(Some(Point {
                     id: metadata.id,
@@ -210,13 +242,16 @@ impl AdvancedStorage {
         let vectors_tree = self.get_tree(ColumnFamilies::VECTORS)?;
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
-        let result: TransactionResult<bool, ()> = (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
-            let vector_existed = vectors_tx.remove(id.as_bytes())?.is_some();
-            let metadata_existed = metadata_tx.remove(id.as_bytes())?.is_some();
-            Ok(vector_existed || metadata_existed)
-        });
+        let result: TransactionResult<bool, ()> =
+            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+                let vector_existed = vectors_tx.remove(id.as_bytes())?.is_some();
+                let metadata_existed = metadata_tx.remove(id.as_bytes())?.is_some();
+                Ok(vector_existed || metadata_existed)
+            });
 
-        let deleted = result.map_err(|e| VectorDbError::StorageError(format!("Delete transaction failed: {:?}", e)))?;
+        let deleted = result.map_err(|e| {
+            VectorDbError::StorageError(format!("Delete transaction failed: {:?}", e))
+        })?;
 
         if deleted {
             self.update_stats();
@@ -228,19 +263,31 @@ impl AdvancedStorage {
     /// Create a backup of the database
     pub fn create_backup(&self) -> Result<String> {
         if let Some(backup_path) = &self.config.backup_path {
-            let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let backup_id = format!("backup_{}", timestamp);
             let backup_dir = backup_path.join(&backup_id);
 
             // Create backup directory
-            std::fs::create_dir_all(&backup_dir)
-                .map_err(|e| VectorDbError::StorageError(format!("Failed to create backup directory: {}", e)))?;
+            std::fs::create_dir_all(&backup_dir).map_err(|e| {
+                VectorDbError::StorageError(format!("Failed to create backup directory: {}", e))
+            })?;
 
             // Export database to backup directory
             for (key, value, _) in self.db.export() {
-                let backup_file = backup_dir.join(format!("{}.backup", format!("{:x}", key.iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64)))));
-                std::fs::write(backup_file, &value)
-                    .map_err(|e| VectorDbError::StorageError(format!("Failed to write backup file: {}", e)))?;
+                let backup_file = backup_dir.join(format!(
+                    "{}.backup",
+                    format!(
+                        "{:x}",
+                        key.iter()
+                            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
+                    )
+                ));
+                std::fs::write(backup_file, &value).map_err(|e| {
+                    VectorDbError::StorageError(format!("Failed to write backup file: {}", e))
+                })?;
             }
 
             // Update backup timestamp in stats
@@ -251,37 +298,43 @@ impl AdvancedStorage {
 
             Ok(backup_id)
         } else {
-            Err(VectorDbError::StorageError("Backup path not configured".to_string()))
+            Err(VectorDbError::StorageError(
+                "Backup path not configured".to_string(),
+            ))
         }
     }
 
     /// Create a checkpoint (snapshot) of the database
     pub fn create_checkpoint<P: AsRef<Path>>(&self, checkpoint_path: P) -> Result<()> {
         let checkpoint_dir = checkpoint_path.as_ref();
-        
+
         // Create checkpoint directory
-        std::fs::create_dir_all(checkpoint_dir)
-            .map_err(|e| VectorDbError::StorageError(format!("Failed to create checkpoint directory: {}", e)))?;
+        std::fs::create_dir_all(checkpoint_dir).map_err(|e| {
+            VectorDbError::StorageError(format!("Failed to create checkpoint directory: {}", e))
+        })?;
 
         // Flush all pending writes
-        self.db.flush()
+        self.db
+            .flush()
             .map_err(|e| VectorDbError::StorageError(format!("Failed to flush database: {}", e)))?;
 
         // Use Sled's export functionality instead of copying files
         // This avoids file locking issues
         let checkpoint_file = checkpoint_dir.join("checkpoint.db");
         let mut checkpoint_data = Vec::new();
-        
+
         for (key, value, _) in self.db.export() {
             checkpoint_data.push((key.to_vec(), value.to_vec()));
         }
-        
+
         // Write checkpoint data as a simple format
-        let serialized = bincode::serialize(&checkpoint_data)
-            .map_err(|e| VectorDbError::StorageError(format!("Failed to serialize checkpoint: {}", e)))?;
-        
-        std::fs::write(checkpoint_file, serialized)
-            .map_err(|e| VectorDbError::StorageError(format!("Failed to write checkpoint file: {}", e)))?;
+        let serialized = bincode::serialize(&checkpoint_data).map_err(|e| {
+            VectorDbError::StorageError(format!("Failed to serialize checkpoint: {}", e))
+        })?;
+
+        std::fs::write(checkpoint_file, serialized).map_err(|e| {
+            VectorDbError::StorageError(format!("Failed to write checkpoint file: {}", e))
+        })?;
 
         Ok(())
     }
@@ -289,8 +342,9 @@ impl AdvancedStorage {
     /// Compact the database to reclaim space
     pub fn compact(&self) -> Result<()> {
         // Sled doesn't have explicit compaction, but we can trigger cleanup
-        self.db.flush()
-            .map_err(|e| VectorDbError::StorageError(format!("Failed to flush during compaction: {}", e)))?;
+        self.db.flush().map_err(|e| {
+            VectorDbError::StorageError(format!("Failed to flush during compaction: {}", e))
+        })?;
 
         // Update statistics after compaction
         self.update_stats();
@@ -303,38 +357,45 @@ impl AdvancedStorage {
         self.update_stats();
         self.stats.read().clone()
     }
-    
+
     /// 预热缓存
     pub async fn warmup_cache(&self) -> Result<()> {
         tracing::info!("Starting cache warmup...");
         let start = Instant::now();
-        
+
         // 预加载一些常用数据到缓存
         // 这里可以实现具体的预热逻辑，比如：
         // 1. 预加载最近访问的向量
         // 2. 预加载索引数据
         // 3. 预加载元数据
-        
+
         // 简单实现：遍历一部分数据来预热缓存
         let vectors_tree = self.get_tree(ColumnFamilies::VECTORS)?;
         let mut count = 0;
-        for item in vectors_tree.iter().take(1000) { // 预热前1000个向量
+        for item in vectors_tree.iter().take(1000) {
+            // 预热前1000个向量
             if let Ok((_, _)) = item {
                 count += 1;
             }
         }
-        
-        tracing::info!("Cache warmup completed in {:?}, preloaded {} items", start.elapsed(), count);
+
+        tracing::info!(
+            "Cache warmup completed in {:?}, preloaded {} items",
+            start.elapsed(),
+            count
+        );
         Ok(())
     }
-    
+
     /// 刷新数据到磁盘
     pub async fn flush(&self) -> Result<()> {
-        self.db.flush_async().await
+        self.db
+            .flush_async()
+            .await
             .map_err(|e| VectorDbError::StorageError(format!("Failed to flush: {}", e)))?;
         Ok(())
     }
-    
+
     /// 同步数据
     pub async fn sync(&self) -> Result<()> {
         // Sled的flush_async已经包含了同步操作
@@ -353,7 +414,10 @@ impl AdvancedStorage {
                     ids.push(id);
                 }
                 Err(e) => {
-                    return Err(VectorDbError::StorageError(format!("Failed to iterate vectors: {}", e)));
+                    return Err(VectorDbError::StorageError(format!(
+                        "Failed to iterate vectors: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -366,40 +430,55 @@ impl AdvancedStorage {
         let vectors_tree = self.get_tree(ColumnFamilies::VECTORS)?;
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
-        let result: TransactionResult<(), ()> = (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
-            for point in &points {
-                // Serialize vector data
-                let vector_data = match bincode::serialize(&point.vector) {
-                    Ok(data) => data,
-                    Err(_) => return Err(sled::transaction::ConflictableTransactionError::Abort(())),
-                };
+        let result: TransactionResult<(), ()> =
+            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+                for point in &points {
+                    // Serialize vector data
+                    let vector_data = match bincode::serialize(&point.vector) {
+                        Ok(data) => data,
+                        Err(_) => {
+                            return Err(sled::transaction::ConflictableTransactionError::Abort(()))
+                        }
+                    };
 
-                // Serialize metadata
-                let payload_json = match serde_json::to_string(&point.payload) {
-                    Ok(json) => json,
-                    Err(_) => return Err(sled::transaction::ConflictableTransactionError::Abort(())),
-                };
-                
-                let metadata = VectorMetadata {
-                    id: point.id.clone(),
-                    dimension: point.vector.len(),
-                    payload_json,
-                    created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                    updated_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                };
+                    // Serialize metadata
+                    let payload_json = match serde_json::to_string(&point.payload) {
+                        Ok(json) => json,
+                        Err(_) => {
+                            return Err(sled::transaction::ConflictableTransactionError::Abort(()))
+                        }
+                    };
 
-                let metadata_data = match bincode::serialize(&metadata) {
-                    Ok(data) => data,
-                    Err(_) => return Err(sled::transaction::ConflictableTransactionError::Abort(())),
-                };
+                    let metadata = VectorMetadata {
+                        id: point.id.clone(),
+                        dimension: point.vector.len(),
+                        payload_json,
+                        created_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                        updated_at: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
+                    };
 
-                vectors_tx.insert(point.id.as_bytes(), vector_data)?;
-                metadata_tx.insert(point.id.as_bytes(), metadata_data)?;
-            }
-            Ok(())
-        });
+                    let metadata_data = match bincode::serialize(&metadata) {
+                        Ok(data) => data,
+                        Err(_) => {
+                            return Err(sled::transaction::ConflictableTransactionError::Abort(()))
+                        }
+                    };
 
-        result.map_err(|e| VectorDbError::StorageError(format!("Batch transaction failed: {:?}", e)))?;
+                    vectors_tx.insert(point.id.as_bytes(), vector_data)?;
+                    metadata_tx.insert(point.id.as_bytes(), metadata_data)?;
+                }
+                Ok(())
+            });
+
+        result.map_err(|e| {
+            VectorDbError::StorageError(format!("Batch transaction failed: {:?}", e))
+        })?;
 
         self.update_stats();
         Ok(())
@@ -409,10 +488,10 @@ impl AdvancedStorage {
     fn update_stats(&self) {
         if let Ok(vectors_tree) = self.get_tree(ColumnFamilies::VECTORS) {
             let mut stats = self.stats.write();
-            
+
             // Estimate number of keys
             stats.estimated_keys = vectors_tree.len() as u64;
-            
+
             // Calculate approximate sizes
             let mut total_size = 0u64;
             for result in vectors_tree.iter() {
@@ -420,15 +499,19 @@ impl AdvancedStorage {
                     total_size += key.len() as u64 + value.len() as u64;
                 }
             }
-            
+
             stats.total_size = total_size;
             stats.live_data_size = total_size; // Sled handles compression internally
-            
+
             // Estimate compression ratio (simplified)
             if stats.total_size > 0 {
-                stats.compression_ratio = if self.config.enable_compression { 0.7 } else { 1.0 };
+                stats.compression_ratio = if self.config.enable_compression {
+                    0.7
+                } else {
+                    1.0
+                };
             }
-            
+
             // Cache hit rate (simplified estimation)
             stats.cache_hit_rate = 0.85; // Sled manages cache internally
         }
@@ -437,7 +520,8 @@ impl AdvancedStorage {
     /// Put raw data (generic method for distributed systems)
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
-        metadata_tree.insert(key, value)
+        metadata_tree
+            .insert(key, value)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to put data: {}", e)))?;
         Ok(())
     }
@@ -445,7 +529,8 @@ impl AdvancedStorage {
     /// Get raw data (generic method for distributed systems)
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
-        let result = metadata_tree.get(key)
+        let result = metadata_tree
+            .get(key)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
         Ok(result.map(|ivec| ivec.to_vec()))
     }
@@ -453,7 +538,8 @@ impl AdvancedStorage {
     /// Delete raw data (generic method for distributed systems)
     pub fn delete(&self, key: &[u8]) -> Result<bool> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
-        let removed = metadata_tree.remove(key)
+        let removed = metadata_tree
+            .remove(key)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to delete data: {}", e)))?;
         Ok(removed.is_some())
     }
@@ -482,4 +568,4 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result
         }
     }
     Ok(())
-} 
+}

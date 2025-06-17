@@ -1,11 +1,11 @@
-use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 use crate::{
+    index::{IndexStats, VectorIndex},
     types::VectorDbError,
-    index::{VectorIndex, IndexStats},
 };
 
 /// 索引优化器配置
@@ -92,12 +92,11 @@ impl IndexOptimizer {
     /// 获取优化统计信息
     pub fn get_optimization_stats(&self) -> OptimizationStats {
         let last_optimization = *self.last_optimization.read();
-        
+
         OptimizationStats {
             last_optimization_time: last_optimization,
-            next_optimization_due: last_optimization.map(|t| {
-                t + Duration::from_secs(self.config.optimization_interval_seconds)
-            }),
+            next_optimization_due: last_optimization
+                .map(|t| t + Duration::from_secs(self.config.optimization_interval_seconds)),
             auto_optimization_enabled: self.config.enable_auto_optimization,
         }
     }
@@ -151,4 +150,4 @@ impl Default for IndexOptimizer {
     fn default() -> Self {
         Self::new(IndexOptimizerConfig::default())
     }
-} 
+}

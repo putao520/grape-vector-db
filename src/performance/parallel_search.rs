@@ -1,9 +1,9 @@
-use rayon::prelude::*;
 use crate::{
-    types::{SearchResult, VectorDbError},
+    concurrent::{AtomicCounters, ConcurrentHashMap},
     storage::VectorStore,
-    concurrent::{ConcurrentHashMap, AtomicCounters},
+    types::{SearchResult, VectorDbError},
 };
+use rayon::prelude::*;
 use std::sync::Arc;
 
 /// 并行搜索配置
@@ -39,7 +39,7 @@ pub struct ParallelSearchExecutor {
 impl ParallelSearchExecutor {
     /// 创建新的并行搜索执行器
     pub fn new(config: ParallelSearchConfig) -> Self {
-        Self { 
+        Self {
             config,
             result_cache: Arc::new(ConcurrentHashMap::new()),
             counters: Arc::new(AtomicCounters::new()),
@@ -50,7 +50,9 @@ impl ParallelSearchExecutor {
     pub fn get_performance_stats(&self) -> (u64, u64, f64) {
         (
             self.counters.get_operations(),
-            self.counters.search_operations.load(std::sync::atomic::Ordering::Relaxed),
+            self.counters
+                .search_operations
+                .load(std::sync::atomic::Ordering::Relaxed),
             self.counters.cache_hit_rate(),
         )
     }
@@ -71,7 +73,7 @@ impl ParallelSearchExecutor {
         // 检查缓存
         let mut cached_results = Vec::new();
         let mut uncached_queries = Vec::new();
-        
+
         for query in &queries {
             if let Some(cached) = self.result_cache.get(query) {
                 cached_results.push(Some(cached.clone()));
@@ -96,7 +98,7 @@ impl ParallelSearchExecutor {
             .collect();
 
         let uncached_results = uncached_results?;
-        
+
         // 缓存新结果
         let mut uncached_iter = uncached_results.into_iter();
         for (i, cached_result) in cached_results.iter_mut().enumerate() {
@@ -111,7 +113,10 @@ impl ParallelSearchExecutor {
         }
 
         // 转换为最终结果
-        Ok(cached_results.into_iter().map(|r| r.unwrap_or_default()).collect())
+        Ok(cached_results
+            .into_iter()
+            .map(|r| r.unwrap_or_default())
+            .collect())
     }
 
     /// 执行并行向量搜索
@@ -125,9 +130,8 @@ impl ParallelSearchExecutor {
             .into_par_iter()
             .map(|query_vector| {
                 tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        storage.vector_search(&query_vector, limit, None).await
-                    })
+                    tokio::runtime::Handle::current()
+                        .block_on(async { storage.vector_search(&query_vector, limit, None).await })
                 })
             })
             .collect();
@@ -144,4 +148,4 @@ impl ParallelSearchExecutor {
     pub fn update_config(&mut self, config: ParallelSearchConfig) {
         self.config = config;
     }
-} 
+}
