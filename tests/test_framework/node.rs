@@ -94,15 +94,17 @@ impl TestNode {
         
         // 创建存储引擎
         let storage_config = AdvancedStorageConfig {
-            db_path: data_dir,
-            max_memory_mb: Some(128),
+            db_path: data_dir.into(),
+            backup_path: None,
             enable_compression: true,
-            sync_writes: false,
-            ..Default::default()
+            cache_size: 128 * 1024 * 1024, // 128MB
+            flush_interval_ms: 1000,
+            enable_checksums: true,
+            max_background_threads: 4,
         };
         
         let storage = Arc::new(
-            AdvancedStorage::new(&storage_config)
+            AdvancedStorage::new(storage_config)
                 .expect("创建存储引擎失败")
         );
         
@@ -135,11 +137,11 @@ impl TestNode {
         // 启动分片管理器（如果启用）
         if self.config.enable_sharding {
             if let Some(shard_config) = &self.config.shard_config {
-                let shard_manager = ShardManager::new(
+                let _shard_manager = ShardManager::new(
                     shard_config.clone(),
                     self.storage.clone(),
                     self.node_id.clone(),
-                ).await?;
+                );
                 // 在这里我们简化实现，实际应用中需要启动分片管理
                 // shard_manager.start().await?;
             }
@@ -284,6 +286,11 @@ impl TestNode {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         })
+    }
+    
+    /// 获取节点ID
+    pub fn get_id(&self) -> &str {
+        &self.node_id
     }
     
     /// 获取节点配置
