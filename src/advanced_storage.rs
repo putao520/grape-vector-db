@@ -34,7 +34,7 @@ impl Default for AdvancedStorageConfig {
         Self {
             db_path: PathBuf::from("./grape_vector_db"),
             backup_path: None,
-            enable_compression: true,
+            enable_compression: false, // Disable compression to avoid Sled feature issues
             cache_size: 512 * 1024 * 1024, // 512MB
             flush_interval_ms: 1000,
             enable_checksums: true,
@@ -78,15 +78,17 @@ impl AdvancedStorage {
     /// Create a new advanced storage instance
     pub fn new(config: AdvancedStorageConfig) -> Result<Self> {
         // Configure Sled database
-        let mut sled_config = sled::Config::default()
+        let sled_config = sled::Config::default()
             .path(&config.db_path)
             .cache_capacity(config.cache_size as u64)
-            .flush_every_ms(Some(config.flush_interval_ms))
-            .use_compression(config.enable_compression);
+            .flush_every_ms(Some(config.flush_interval_ms));
+            // Disable compression for now to avoid Sled feature issues
+            // .use_compression(config.enable_compression);
 
-        if config.enable_checksums {
-            sled_config = sled_config.use_compression(true);
-        }
+        // Removing checksum-based compression for now
+        // if config.enable_checksums {
+        //     sled_config = sled_config.use_compression(true);
+        // }
 
         let db = sled_config.open()
             .map_err(|e| VectorDbError::StorageError(format!("Failed to open database: {}", e)))?;
@@ -443,9 +445,15 @@ impl AdvancedStorage {
     /// Get raw data (generic method for distributed systems)
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
+<<<<<<< HEAD
         let value = metadata_tree.get(key)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
         Ok(value.map(|ivec| ivec.to_vec()))
+=======
+        let result = metadata_tree.get(key)
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
+        Ok(result.map(|ivec| ivec.to_vec()))
+>>>>>>> main
     }
 
     /// Delete raw data (generic method for distributed systems)

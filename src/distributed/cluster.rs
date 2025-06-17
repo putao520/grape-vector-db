@@ -293,7 +293,7 @@ impl ClusterManager {
     }
 
     /// 处理节点失败
-    async fn handle_node_failure(&self, node_id: &NodeId, cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_node_failure(&self, node_id: &NodeId, _cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         warn!("处理节点失败: {}", node_id);
 
         // TODO: 实现节点失败处理逻辑

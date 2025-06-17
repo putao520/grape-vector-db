@@ -123,6 +123,8 @@ pub mod query_engine;
 pub mod performance;
 pub mod advanced_storage;
 pub mod distributed;
+// TODO: Add missing dependencies (geo, rstar, sqlparser) to enable filtering
+// pub mod filtering;
 
 // 重新导出主要类型
 pub use types::*;
