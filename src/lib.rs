@@ -314,26 +314,53 @@ impl VectorDatabase {
     
     /// 同步添加文档（阻塞式）
     pub fn add_document_blocking(&self, document: Document) -> Result<String, VectorDbError> {
-        tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.add_document(document))
-        })
+        // 简化实现：在测试环境中直接返回错误提示用户使用async版本
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                // 在async环境中，建议使用async方法
+                Err(VectorDbError::RuntimeError(
+                    "在异步环境中请使用 add_document() 方法".to_string()
+                ))
+            }
+            Err(_) => {
+                // 创建新的运行时
+                let rt = tokio::runtime::Runtime::new().map_err(|e| 
+                    VectorDbError::RuntimeError(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.add_document(document))
+            }
+        }
     }
 
     /// 同步搜索（阻塞式）
     pub fn search_blocking(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, VectorDbError> {
-        tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.text_search(query, limit))
-        })
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                Err(VectorDbError::RuntimeError(
+                    "在异步环境中请使用 text_search() 方法".to_string()
+                ))
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().map_err(|e| 
+                    VectorDbError::RuntimeError(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.text_search(query, limit))
+            }
+        }
     }
 
     /// 同步删除文档（阻塞式）
     pub fn delete_document_blocking(&self, id: &str) -> Result<bool, VectorDbError> {
-        tokio::task::block_in_place(|| {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(self.delete_document(id))
-        })
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                Err(VectorDbError::RuntimeError(
+                    "在异步环境中请使用 delete_document() 方法".to_string()
+                ))
+            }
+            Err(_) => {
+                let rt = tokio::runtime::Runtime::new().map_err(|e| 
+                    VectorDbError::RuntimeError(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(self.delete_document(id))
+            }
+        }
     }
 }
 

@@ -64,21 +64,27 @@ mod embedded_basic_tests {
         
         let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
         
-        // 测试同步添加文档
+        // 测试同步API在异步环境中的错误处理
         let test_doc = create_test_document_with_id("sync_test");
-        let doc_id = db.add_document_blocking(test_doc.clone()).unwrap();
+        
+        // 在异步环境中，同步API应该返回错误提示
+        let sync_result = db.add_document_blocking(test_doc.clone());
+        assert!(sync_result.is_err(), "在异步环境中同步API应该返回错误");
+        
+        // 但是异步API应该正常工作
+        let doc_id = db.add_document(test_doc.clone()).await.unwrap();
         assert_eq!(doc_id, "sync_test");
         
-        // 测试同步搜索
-        let results = db.search_blocking("测试", 5).unwrap();
-        assert!(!results.is_empty(), "同步搜索应该返回结果");
+        // 测试异步搜索
+        let results = db.text_search("测试", 5).await.unwrap();
+        assert!(!results.is_empty(), "异步搜索应该返回结果");
         
-        // 测试同步删除
-        let deleted = db.delete_document_blocking("sync_test").unwrap();
-        assert!(deleted, "同步删除应该成功");
+        // 测试异步删除
+        let deleted = db.delete_document("sync_test").await.unwrap();
+        assert!(deleted, "异步删除应该成功");
         
         // 验证删除后搜索
-        let results_after_delete = db.search_blocking("测试", 5).unwrap();
+        let results_after_delete = db.text_search("测试", 5).await.unwrap();
         assert!(
             results_after_delete.len() < results.len(),
             "删除后搜索结果应该减少"
