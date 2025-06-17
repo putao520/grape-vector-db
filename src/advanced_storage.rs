@@ -445,15 +445,9 @@ impl AdvancedStorage {
     /// Get raw data (generic method for distributed systems)
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
-<<<<<<< HEAD
-        let value = metadata_tree.get(key)
-            .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
-        Ok(value.map(|ivec| ivec.to_vec()))
-=======
         let result = metadata_tree.get(key)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
         Ok(result.map(|ivec| ivec.to_vec()))
->>>>>>> main
     }
 
     /// Delete raw data (generic method for distributed systems)
