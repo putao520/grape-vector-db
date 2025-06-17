@@ -184,21 +184,9 @@ impl VectorDatabase {
 
     /// 添加文档
     pub async fn add_document(&self, document: Document) -> Result<String, VectorDbError> {
-        // 使用固定的锁顺序：先 storage，后 vector_index（如果需要）
-        let mut storage = self.storage.write().await;
-        let doc_id = storage.insert_document(document).await?;
-        
-        // 如果文档有向量，添加到索引中
-        if let Some(record) = storage.get_document(&doc_id).await? {
-            if let Some(ref vector) = record.vector {
-                // 释放 storage 锁后再获取 vector_index 锁
-                drop(storage);
-                let mut vector_index = self.vector_index.write().await;
-                vector_index.add_vector(doc_id.clone(), vector.clone())?;
-            }
-        }
-        
-        Ok(doc_id)
+        // 对于单个文档，使用批量方法以获得更好的性能
+        let doc_ids = self.batch_add_documents(vec![document]).await?;
+        Ok(doc_ids.into_iter().next().unwrap_or_default())
     }
 
     /// 批量添加文档（更高效的并发操作）
