@@ -1,10 +1,8 @@
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
-
 
 use crate::advanced_storage::AdvancedStorage;
 use crate::distributed::raft::{RaftConfig, RaftNode};
@@ -377,7 +375,7 @@ impl ClusterManager {
 
                 // 如果副本数不足，添加新的副本
                 let target_replicas = 2; // 目标副本数
-                while shard.replica_nodes.len() < target_replicas
+                if shard.replica_nodes.len() < target_replicas
                     && shard.replica_nodes.len() < healthy_nodes.len()
                 {
                     for candidate in &healthy_nodes {
@@ -389,7 +387,6 @@ impl ClusterManager {
                             break;
                         }
                     }
-                    break;
                 }
             }
         }

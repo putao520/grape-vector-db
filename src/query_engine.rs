@@ -219,7 +219,9 @@ impl QueryEngine {
 
     /// 获取缓存统计信息
     pub async fn get_cache_stats(&self) -> Option<(u64, u64)> {
-        self.cache.as_ref().map(|cache| (cache.entry_count(), cache.weighted_size()))
+        self.cache
+            .as_ref()
+            .map(|cache| (cache.entry_count(), cache.weighted_size()))
     }
 
     /// 更新配置

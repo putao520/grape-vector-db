@@ -834,7 +834,7 @@ async fn run_all_standalone_tests() {
     tracing_subscriber::fmt::init();
 
     println!("开始运行单机模式综合测试...");
-    println!("=".repeat(60));
+    println!("{}", "=".repeat(60));
 
     // 注意：在实际测试中，这些测试模块会自动运行
     // 这里只是一个占位符函数来组织测试结构

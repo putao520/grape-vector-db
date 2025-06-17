@@ -278,12 +278,9 @@ impl AdvancedStorage {
             // Export database to backup directory
             for (key, value, _) in self.db.export() {
                 let backup_file = backup_dir.join(format!(
-                    "{}.backup",
-                    format!(
-                        "{:x}",
-                        key.iter()
-                            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
-                    )
+                    "{:x}.backup",
+                    key.iter()
+                        .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64))
                 ));
                 std::fs::write(backup_file, &value).map_err(|e| {
                     VectorDbError::StorageError(format!("Failed to write backup file: {}", e))
@@ -372,11 +369,9 @@ impl AdvancedStorage {
         // 简单实现：遍历一部分数据来预热缓存
         let vectors_tree = self.get_tree(ColumnFamilies::VECTORS)?;
         let mut count = 0;
-        for item in vectors_tree.iter().take(1000) {
+        for (_, _) in vectors_tree.iter().take(1000).flatten() {
             // 预热前1000个向量
-            if let Ok((_, _)) = item {
-                count += 1;
-            }
+            count += 1;
         }
 
         tracing::info!(
@@ -431,7 +426,7 @@ impl AdvancedStorage {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
         let result: TransactionResult<(), ()> =
-            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+            (vectors_tree, metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
                 for point in &points {
                     // Serialize vector data
                     let vector_data = match bincode::serialize(&point.vector) {
@@ -494,10 +489,8 @@ impl AdvancedStorage {
 
             // Calculate approximate sizes
             let mut total_size = 0u64;
-            for result in vectors_tree.iter() {
-                if let Ok((key, value)) = result {
-                    total_size += key.len() as u64 + value.len() as u64;
-                }
+            for (key, value) in vectors_tree.iter().flatten() {
+                total_size += key.len() as u64 + value.len() as u64;
             }
 
             stats.total_size = total_size;

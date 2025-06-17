@@ -381,7 +381,7 @@ impl ConsensusManager {
         }
 
         // 获取需要的票数
-        let votes_needed = (other_nodes.len() + 1) / 2 + 1; // 过半数
+        let votes_needed = other_nodes.len().div_ceil(2) + 1; // 过半数
 
         // 并行发送投票请求
         let mut vote_tasks = Vec::new();

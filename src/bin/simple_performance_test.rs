@@ -1,4 +1,3 @@
-use chrono;
 use futures::future::join_all;
 use grape_vector_db::{errors::Result, Document, EmbeddingConfig, VectorDatabase, VectorDbConfig};
 use rand::{thread_rng, Rng};

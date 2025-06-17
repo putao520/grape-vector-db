@@ -181,9 +181,9 @@ impl NetworkManager {
                         return Ok(vote_response);
                     }
                 }
-                return Err(api_response.error.unwrap_or("未知错误".to_string()).into());
+                Err(api_response.error.unwrap_or("未知错误".to_string()).into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -210,9 +210,9 @@ impl NetworkManager {
                         return Ok(append_response);
                     }
                 }
-                return Err(api_response.error.unwrap_or("未知错误".to_string()).into());
+                Err(api_response.error.unwrap_or("未知错误".to_string()).into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -279,12 +279,12 @@ impl NetworkManager {
                     return Ok(join_response.cluster_info);
                 }
             }
-            return Err(api_response
+            Err(api_response
                 .error
                 .unwrap_or("加入集群失败".to_string())
-                .into());
+                .into())
         } else {
-            return Err(format!("HTTP错误: {}", response.status()).into());
+            Err(format!("HTTP错误: {}", response.status()).into())
         }
     }
 
@@ -307,12 +307,12 @@ impl NetworkManager {
                         return Ok(cluster_info);
                     }
                 }
-                return Err(api_response
+                Err(api_response
                     .error
                     .unwrap_or("获取集群信息失败".to_string())
-                    .into());
+                    .into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())

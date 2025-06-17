@@ -284,10 +284,13 @@ impl Default for AtomicCounters {
     }
 }
 
+/// 类型别名：工作窃取队列类型  
+type StealQueues<T> = Arc<RwLock<Vec<Arc<Mutex<Vec<T>>>>>>;
+
 /// 工作偷取队列，用于任务分发
 pub struct WorkStealingQueue<T> {
     local_queue: Arc<Mutex<Vec<T>>>,
-    steal_queues: Arc<RwLock<Vec<Arc<Mutex<Vec<T>>>>>>,
+    steal_queues: StealQueues<T>,
     worker_id: usize,
     total_workers: AtomicUsize,
 }
@@ -427,7 +430,7 @@ where
 
                     if !batch.is_empty() {
                         // 处理批次
-                        let results = processor(batch.drain(..).collect());
+                        let results = processor(std::mem::take(&mut batch));
 
                         // 发送结果
                         for result in results {

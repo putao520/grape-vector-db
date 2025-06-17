@@ -151,10 +151,7 @@ impl VectorIndex for HnswVectorIndex {
     }
 
     fn search(&self, query: &[f32], k: usize) -> Result<Vec<(String, f32)>, VectorDbError> {
-        let hnsw = self
-            .hnsw
-            .as_ref()
-            .ok_or(VectorDbError::IndexNotBuilt)?;
+        let hnsw = self.hnsw.as_ref().ok_or(VectorDbError::IndexNotBuilt)?;
 
         let query_point = VectorPoint(query.to_vec());
         let mut search = Search::default();

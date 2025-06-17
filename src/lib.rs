@@ -121,6 +121,8 @@ pub mod concurrent;
 pub mod distributed;
 pub mod index;
 pub mod performance;
+// TODO: Add missing dependencies (bitvec, hamming) to enable quantization
+// pub mod quantization;
 pub mod query_engine;
 pub mod storage;
 pub mod types;
@@ -143,8 +145,6 @@ pub mod errors {
 
 use std::path::PathBuf;
 use std::sync::Arc;
-
-
 
 /// 向量数据库主结构
 #[derive(Clone)]
