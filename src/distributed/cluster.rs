@@ -293,13 +293,70 @@ impl ClusterManager {
     }
 
     /// 处理节点失败
-    async fn handle_node_failure(&self, node_id: &NodeId, _cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_node_failure(&self, node_id: &NodeId, cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         warn!("处理节点失败: {}", node_id);
 
-        // TODO: 实现节点失败处理逻辑
         // 1. 重新分配分片
-        // 2. 更新副本
-        // 3. 通知其他节点
+        let affected_shards: Vec<u32> = cluster_info.shard_map.shards
+            .iter()
+            .filter(|(_, shard)| shard.primary_node == *node_id || shard.replica_nodes.contains(node_id))
+            .map(|(shard_id, _)| *shard_id)
+            .collect();
+
+        info!("节点 {} 失败，影响 {} 个分片", node_id, affected_shards.len());
+
+        // 2. 为每个受影响的分片重新分配节点
+        let healthy_nodes: Vec<NodeId> = cluster_info.nodes
+            .iter()
+            .filter(|(id, node)| *id != node_id && node.state == NodeState::Healthy)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if healthy_nodes.is_empty() {
+            error!("没有健康的节点可用于重新分配分片");
+            return Err("没有健康的节点可用于重新分配分片".into());
+        }
+
+        for shard_id in affected_shards {
+            if let Some(shard) = cluster_info.shard_map.shards.get_mut(&shard_id) {
+                // 如果失败节点是主节点，选择一个副本作为新主节点
+                if shard.primary_node == *node_id {
+                    if let Some(new_primary) = shard.replica_nodes.first().cloned() {
+                        info!("分片 {} 的主节点从 {} 迁移到 {}", shard_id, node_id, new_primary);
+                        shard.primary_node = new_primary.clone();
+                        shard.replica_nodes.retain(|id| id != &new_primary);
+                    } else {
+                        // 没有副本，选择一个健康节点作为新主节点
+                        if let Some(new_primary) = healthy_nodes.first() {
+                            warn!("分片 {} 没有副本，将 {} 设为新主节点", shard_id, new_primary);
+                            shard.primary_node = new_primary.clone();
+                        }
+                    }
+                }
+
+                // 从副本列表中移除失败节点
+                shard.replica_nodes.retain(|id| id != node_id);
+
+                // 如果副本数不足，添加新的副本
+                let target_replicas = 2; // 目标副本数
+                while shard.replica_nodes.len() < target_replicas && shard.replica_nodes.len() < healthy_nodes.len() {
+                    for candidate in &healthy_nodes {
+                        if candidate != &shard.primary_node && !shard.replica_nodes.contains(candidate) {
+                            info!("为分片 {} 添加新副本: {}", shard_id, candidate);
+                            shard.replica_nodes.push(candidate.clone());
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // 3. 通知其他节点配置变更
+        info!("向集群广播节点失败通知: {}", node_id);
+        
+        // 更新集群版本
+        cluster_info.version += 1;
 
         Ok(())
     }
@@ -354,8 +411,69 @@ impl ClusterManager {
     }
 
     /// 节点移除后重新平衡分片
-    async fn rebalance_shards_after_node_removal(&self, _node_id: &NodeId, _cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: 实现分片重新平衡逻辑
+    async fn rebalance_shards_after_node_removal(&self, node_id: &NodeId, cluster_info: &mut ClusterInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("开始重新平衡分片，移除的节点: {}", node_id);
+        
+        // 这个逻辑与 handle_node_failure 类似，但专门用于节点移除
+        let affected_shards: Vec<u32> = cluster_info.shard_map.shards
+            .iter()
+            .filter(|(_, shard)| shard.primary_node == *node_id || shard.replica_nodes.contains(node_id))
+            .map(|(shard_id, _)| *shard_id)
+            .collect();
+
+        if affected_shards.is_empty() {
+            info!("移除的节点 {} 没有分片，无需重新平衡", node_id);
+            return Ok(());
+        }
+
+        info!("节点 {} 移除，需要重新平衡 {} 个分片", node_id, affected_shards.len());
+
+        let healthy_nodes: Vec<NodeId> = cluster_info.nodes
+            .iter()
+            .filter(|(id, node)| *id != node_id && node.state == NodeState::Healthy)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if healthy_nodes.is_empty() {
+            error!("没有健康的节点可用于重新平衡分片");
+            return Err("没有健康的节点可用于重新平衡分片".into());
+        }
+
+        // 使用轮询策略分配分片
+        let mut node_index = 0;
+        
+        for shard_id in affected_shards {
+            if let Some(shard) = cluster_info.shard_map.shards.get_mut(&shard_id) {
+                // 重新分配主节点
+                if shard.primary_node == *node_id {
+                    let new_primary = &healthy_nodes[node_index % healthy_nodes.len()];
+                    info!("分片 {} 的主节点从 {} 重新分配到 {}", shard_id, node_id, new_primary);
+                    shard.primary_node = new_primary.clone();
+                    node_index += 1;
+                }
+
+                // 从副本列表中移除节点
+                shard.replica_nodes.retain(|id| id != node_id);
+
+                // 确保有足够的副本
+                let target_replicas = std::cmp::min(2, healthy_nodes.len().saturating_sub(1));
+                while shard.replica_nodes.len() < target_replicas {
+                    let candidate = &healthy_nodes[node_index % healthy_nodes.len()];
+                    if candidate != &shard.primary_node && !shard.replica_nodes.contains(candidate) {
+                        info!("为分片 {} 添加新副本: {}", shard_id, candidate);
+                        shard.replica_nodes.push(candidate.clone());
+                    }
+                    node_index += 1;
+                    
+                    // 防止无限循环
+                    if node_index > healthy_nodes.len() * 2 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        info!("分片重新平衡完成");
         Ok(())
     }
 

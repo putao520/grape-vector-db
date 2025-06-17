@@ -181,8 +181,50 @@ impl VectorDatabase {
 
     /// 添加文档
     pub async fn add_document(&self, document: Document) -> Result<String, VectorDbError> {
+        // 使用固定的锁顺序：先 storage，后 vector_index（如果需要）
         let mut storage = self.storage.write().await;
-        storage.insert_document(document).await
+        let doc_id = storage.insert_document(document).await?;
+        
+        // 如果文档有向量，添加到索引中
+        if let Some(record) = storage.get_document(&doc_id).await? {
+            if let Some(ref vector) = record.vector {
+                // 释放 storage 锁后再获取 vector_index 锁
+                drop(storage);
+                let mut vector_index = self.vector_index.write().await;
+                vector_index.add_vector(doc_id.clone(), vector.clone())?;
+            }
+        }
+        
+        Ok(doc_id)
+    }
+
+    /// 批量添加文档（更高效的并发操作）
+    pub async fn batch_add_documents(&self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError> {
+        // 使用一致的锁顺序来避免死锁
+        let mut storage = self.storage.write().await;
+        let doc_ids = storage.batch_insert_documents(documents).await?;
+        
+        // 收集所有需要索引的向量
+        let mut vectors_to_index = Vec::new();
+        for doc_id in &doc_ids {
+            if let Some(record) = storage.get_document(doc_id).await? {
+                if let Some(vector) = record.vector {
+                    vectors_to_index.push((doc_id.clone(), vector));
+                }
+            }
+        }
+        
+        // 释放存储锁后再批量更新索引
+        drop(storage);
+        
+        if !vectors_to_index.is_empty() {
+            let mut vector_index = self.vector_index.write().await;
+            for (doc_id, vector) in vectors_to_index {
+                vector_index.add_vector(doc_id, vector)?;
+            }
+        }
+        
+        Ok(doc_ids)
     }
 
     /// 获取文档
@@ -209,6 +251,12 @@ impl VectorDatabase {
 
     /// 删除文档
     pub async fn delete_document(&self, id: &str) -> Result<bool, VectorDbError> {
+        // 使用固定的锁顺序：先从索引删除，再从存储删除
+        {
+            let mut vector_index = self.vector_index.write().await;
+            let _ = vector_index.remove_vector(id); // 忽略错误，因为可能没有向量
+        }
+        
         let mut storage = self.storage.write().await;
         storage.delete_document(id).await
     }
@@ -273,20 +321,20 @@ impl VectorDatabase {
 
     /// 重建索引
     pub async fn rebuild_index(&self) -> Result<(), VectorDbError> {
-        // 简单实现：清空索引并重新添加所有向量
-        {
-            let mut vector_index = self.vector_index.write().await;
-            vector_index.clear();
-        }
-        
-        // 从存储中重新加载所有文档的向量
+        // 一次性获取两个锁，按固定顺序避免死锁
+        // 总是先获取 storage 锁，然后获取 vector_index 锁
         let storage = self.storage.read().await;
+        let mut vector_index = self.vector_index.write().await;
+        
+        // 清空索引
+        vector_index.clear();
+        
+        // 重新加载所有文档的向量
         let ids = storage.list_document_ids(0, usize::MAX).await?;
         
         for id in ids {
             if let Some(record) = storage.get_document(&id).await? {
                 if let Some(vector) = record.vector {
-                    let mut vector_index = self.vector_index.write().await;
                     vector_index.add_vector(id, vector)?;
                 }
             }
