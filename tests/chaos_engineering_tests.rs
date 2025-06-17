@@ -11,6 +11,7 @@ mod test_framework;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::time::Duration;
+use chrono;
 
 use grape_vector_db::types::*;
 use test_framework::*;
@@ -517,11 +518,28 @@ mod system_chaos_tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // 模拟降级搜索：返回部分结果
-        vec![SearchResult {
+        let now = chrono::Utc::now();
+        let document = DocumentRecord {
             id: "degraded_result".to_string(),
-            score: 0.7,
-            document: None,
+            content: "degraded search result".to_string(),
+            title: "Degraded Result".to_string(),
+            language: "zh".to_string(),
+            package_name: "test".to_string(),
+            version: "1.0".to_string(),
+            doc_type: "test".to_string(),
+            vector: None,
             metadata: HashMap::new(),
+            embedding: vec![0.1; 768], // dummy embedding
+            sparse_representation: None,
+            created_at: now,
+            updated_at: now,
+        };
+        
+        vec![SearchResult {
+            document,
+            score: 0.7,
+            relevance_score: Some(0.7),
+            matched_snippets: Some(vec!["degraded search result".to_string()]),
         }]
     }
 
@@ -627,7 +645,7 @@ async fn run_all_chaos_tests() {
     tracing_subscriber::fmt::init();
 
     println!("开始运行混沌工程综合测试...");
-    println!("=".repeat(60));
+    println!("{}", "=".repeat(60));
 
     // 注意：在实际测试中，这些测试模块会自动运行
     // 这里只是一个占位符函数来组织测试结构

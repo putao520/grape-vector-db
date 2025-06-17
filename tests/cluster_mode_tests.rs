@@ -154,7 +154,7 @@ mod three_node_cluster_tests {
             println!("选举轮次 {}", round + 1);
 
             let current_leader = cluster.wait_for_leader().await.unwrap();
-            let leader_id = current_leader.node_id().to_string();
+            let leader_id = current_leader;
             election_results.push(leader_id.clone());
 
             println!("  当前领导者: {}", leader_id);
@@ -166,10 +166,10 @@ mod three_node_cluster_tests {
             tokio::time::sleep(Duration::from_millis(300)).await;
 
             let new_leader = cluster.wait_for_leader().await.unwrap();
-            let new_leader_id = new_leader.node_id();
+            let new_leader_id = &new_leader;
 
             println!("  新领导者: {}", new_leader_id);
-            assert_ne!(new_leader_id, leader_id, "应该选出不同的领导者");
+            assert_ne!(new_leader_id, &leader_id, "应该选出不同的领导者");
 
             // 重启原领导者
             cluster.restart_node(&leader_id).await.unwrap();
@@ -783,7 +783,7 @@ async fn run_all_cluster_tests() {
     tracing_subscriber::fmt::init();
 
     println!("开始运行集群模式综合测试...");
-    println!("=".repeat(60));
+    println!("{}", "=".repeat(60));
 
     // 注意：在实际测试中，这些测试模块会自动运行
     // 这里只是一个占位符函数来组织测试结构
