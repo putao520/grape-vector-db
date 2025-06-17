@@ -142,11 +142,55 @@ impl VectorStore for BasicVectorStore {
     }
     
     async fn batch_insert_documents(&mut self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError> {
+        if documents.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let now = chrono::Utc::now();
+        let mut batch_data = Vec::new();
         let mut ids = Vec::new();
+
+        // 准备批量数据
         for document in documents {
-            let id = self.insert_document(document).await?;
+            let id = if document.id.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                document.id.clone()
+            };
+
+            let record = DocumentRecord {
+                id: id.clone(),
+                content: document.content,
+                title: document.title.unwrap_or_default(),
+                language: document.language.unwrap_or_default(),
+                package_name: document.package_name.unwrap_or_default(),
+                version: document.version.unwrap_or_default(),
+                doc_type: document.doc_type.unwrap_or_default(),
+                vector: document.vector,
+                metadata: document.metadata,
+                embedding: Vec::new(),
+                sparse_representation: None,
+                created_at: now,
+                updated_at: now,
+            };
+
+            let key = format!("doc:{}", id);
+            let value = postcard::to_allocvec(&record)
+                .map_err(|e| VectorDbError::SerializationError(e.to_string()))?;
+            
+            batch_data.push((key, value));
             ids.push(id);
         }
+
+        // 使用 Sled 的批量操作
+        let mut batch = sled::Batch::default();
+        for (key, value) in batch_data {
+            batch.insert(key.as_bytes(), value);
+        }
+        
+        self.db.apply_batch(batch)
+            .map_err(|e| VectorDbError::StorageError(e.to_string()))?;
+
         Ok(ids)
     }
     
