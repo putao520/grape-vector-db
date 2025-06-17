@@ -144,8 +144,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use uuid;
 
 /// 向量数据库主结构
+#[derive(Clone)]
 pub struct VectorDatabase {
     storage: Arc<RwLock<dyn VectorStore>>,
     vector_index: Arc<RwLock<dyn VectorIndex>>,
@@ -201,28 +203,33 @@ impl VectorDatabase {
 
     /// 批量添加文档（更高效的并发操作）
     pub async fn batch_add_documents(&self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError> {
-        // 使用一致的锁顺序来避免死锁
-        let mut storage = self.storage.write().await;
-        let doc_ids = storage.batch_insert_documents(documents).await?;
-        
-        // 收集所有需要索引的向量
+        if documents.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 预先收集需要索引的向量，避免后续查询
         let mut vectors_to_index = Vec::new();
-        for doc_id in &doc_ids {
-            if let Some(record) = storage.get_document(doc_id).await? {
-                if let Some(vector) = record.vector {
-                    vectors_to_index.push((doc_id.clone(), vector));
-                }
+        for document in &documents {
+            if let Some(ref vector) = document.vector {
+                let id = if document.id.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    document.id.clone()
+                };
+                vectors_to_index.push((id, vector.clone()));
             }
         }
+
+        // 批量插入到存储层
+        let mut storage = self.storage.write().await;
+        let doc_ids = storage.batch_insert_documents(documents).await?;
         
         // 释放存储锁后再批量更新索引
         drop(storage);
         
         if !vectors_to_index.is_empty() {
             let mut vector_index = self.vector_index.write().await;
-            for (doc_id, vector) in vectors_to_index {
-                vector_index.add_vector(doc_id, vector)?;
-            }
+            vector_index.add_vectors(vectors_to_index)?;
         }
         
         Ok(doc_ids)

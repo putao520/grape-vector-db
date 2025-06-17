@@ -33,6 +33,7 @@ impl Default for QueryEngineConfig {
 }
 
 /// 查询引擎
+#[derive(Clone)]
 pub struct QueryEngine {
     storage: Arc<RwLock<dyn VectorStore>>,
     vector_index: Arc<RwLock<dyn VectorIndex>>,
