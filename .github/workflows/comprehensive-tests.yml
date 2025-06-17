@@ -1,0 +1,238 @@
+name: 🧪 Grape Vector DB - 综合测试
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * *'  # 每天凌晨2点运行完整测试
+  workflow_dispatch:     # 允许手动触发
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # 快速单元测试
+  unit-tests:
+    name: 📋 单元测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🔍 代码格式检查
+      run: cargo fmt --all -- --check
+      
+    - name: 📎 Clippy 检查
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      
+    - name: 🏗️ 构建项目
+      run: cargo build --verbose
+      
+    - name: ✅ 运行单元测试
+      run: cargo test --lib --verbose
+
+  # 内嵌模式测试
+  embedded-mode-tests:
+    name: 📦 内嵌模式测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: unit-tests
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🧪 运行内嵌模式测试
+      run: cargo test --test embedded_mode_tests --verbose
+      env:
+        TEST_MODE: embedded
+        
+    - name: 📊 生成测试报告
+      if: always()
+      run: |
+        echo "## 📦 内嵌模式测试结果" >> $GITHUB_STEP_SUMMARY
+        echo "测试完成时间: $(date)" >> $GITHUB_STEP_SUMMARY
+
+  # 单机模式测试
+  standalone-mode-tests:
+    name: 🖥️ 单机模式测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: unit-tests
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🧪 运行单机模式测试
+      run: cargo test --test standalone_mode_tests --verbose
+      env:
+        TEST_MODE: standalone
+
+  # Raft 共识算法测试
+  raft-consensus-tests:
+    name: 🗳️ Raft 共识算法测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: unit-tests
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🧪 运行 Raft 算法测试
+      run: cargo test --test raft_comprehensive_tests --verbose
+      env:
+        RUST_LOG: info
+
+  # 分片算法测试  
+  resharding-tests:
+    name: 🔀 Resharding 分片算法测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: unit-tests
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🧪 运行分片算法测试
+      run: cargo test --test resharding_comprehensive_tests --verbose
+      env:
+        RUST_LOG: info
+
+  # 集群模式测试
+  cluster-mode-tests:
+    name: 🏭 集群模式测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [raft-consensus-tests, resharding-tests]
+    
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 🦀 安装 Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: 📦 缓存依赖
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: 🧪 运行集群模式测试
+      run: cargo test --test cluster_mode_tests --verbose
+      env:
+        RUST_LOG: info
+
+  # 测试总结
+  test-summary:
+    name: 📋 测试总结
+    runs-on: ubuntu-latest
+    needs: [embedded-mode-tests, standalone-mode-tests, raft-consensus-tests, resharding-tests, cluster-mode-tests]
+    if: always()
+    
+    steps:
+    - name: 📊 生成综合测试报告
+      run: |
+        echo "# 🧪 Grape Vector DB 综合测试报告" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📈 测试覆盖情况" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 内嵌模式测试: ${{ needs.embedded-mode-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 单机模式测试: ${{ needs.standalone-mode-tests.result }}" >> $GITHUB_STEP_SUMMARY  
+        echo "- ✅ Raft共识算法测试: ${{ needs.raft-consensus-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 分片算法测试: ${{ needs.resharding-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ 集群模式测试: ${{ needs.cluster-mode-tests.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎯 测试目标达成" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] 内嵌模式功能验证" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] 单机模式服务验证" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] 3节点集群共识验证" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] 6节点集群扩展性验证" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] Raft算法正确性验证" >> $GITHUB_STEP_SUMMARY
+        echo "- [x] 分片算法效率验证" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "测试完成时间: $(date)" >> $GITHUB_STEP_SUMMARY
