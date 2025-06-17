@@ -464,7 +464,7 @@ impl ChaosExperimentBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            duration: Duration::from_minutes(1),
+            duration: Duration::from_secs(60),
             node_failure_rate: 0.1,
             network_failure_rate: 0.1,
             recovery_time: Duration::from_secs(30),

@@ -28,7 +28,7 @@ pub struct Partition {
 }
 
 /// 网络混沌配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkChaos {
     /// 丢包率 (0.0-1.0)
     pub packet_loss: f64,
@@ -49,8 +49,8 @@ impl NetworkSimulator {
         }
     }
     
-    /// 创建网络分区
-    pub async fn create_partition(&self, partition1: Vec<String>, partition2: Vec<String>) {
+    /// 创建网络分区（向后兼容）
+    pub async fn create_partition_legacy(&self, partition1: Vec<String>, partition2: Vec<String>) {
         let mut partitions = self.partitions.write().await;
         
         // 清除现有分区
@@ -96,6 +96,45 @@ impl NetworkSimulator {
         let mut partitions = self.partitions.write().await;
         partitions.clear();
         tracing::info!("愈合所有网络分区");
+    }
+    
+    /// 使用节点索引创建网络分区
+    pub async fn create_partition(&self, group1: Vec<usize>, group2: Vec<usize>) -> Result<()> {
+        let partition1: Vec<String> = group1.into_iter().map(|i| format!("node_{}", i)).collect();
+        let partition2: Vec<String> = group2.into_iter().map(|i| format!("node_{}", i)).collect();
+        self.create_partition_by_name(partition1, partition2).await;
+        Ok(())
+    }
+    
+    /// 使用节点名称创建网络分区
+    pub async fn create_partition_by_name(&self, partition1: Vec<String>, partition2: Vec<String>) {
+        let mut partitions = self.partitions.write().await;
+        
+        // 清除现有分区
+        partitions.clear();
+        
+        // 创建新分区
+        if !partition1.is_empty() {
+            partitions.push(Partition {
+                id: "partition_1".to_string(),
+                nodes: partition1.into_iter().collect(),
+            });
+        }
+        
+        if !partition2.is_empty() {
+            partitions.push(Partition {
+                id: "partition_2".to_string(),
+                nodes: partition2.into_iter().collect(),
+            });
+        }
+        
+        tracing::info!("创建网络分区: {} 个分区", partitions.len());
+    }
+    
+    /// 修复网络分区
+    pub async fn heal_partition(&self) -> Result<()> {
+        self.heal_all_partitions().await;
+        Ok(())
     }
     
     /// 检查两个节点是否可以通信
@@ -243,7 +282,7 @@ impl NetworkSimulator {
                         let node1 = format!("node_{}", fastrand::u32(0..6));
                         let node2 = format!("node_{}", fastrand::u32(0..6));
                         let spike_latency = Duration::from_millis(chaos.latency_spike);
-                        self.set_latency(node1, node2, spike_latency).await;
+                        self.set_latency(node1.clone(), node2.clone(), spike_latency).await;
                         
                         // 延迟一段时间后恢复
                         let simulator = self.clone();
@@ -267,7 +306,7 @@ impl NetworkSimulator {
                             format!("node_{}", fastrand::u32(3..6)),
                         ];
                         
-                        self.create_partition(partition1, partition2).await;
+                        self.create_partition_by_name(partition1, partition2).await;
                         
                         // 短时间后愈合分区
                         let simulator = self.clone();
@@ -324,7 +363,7 @@ pub mod network_test_utils {
         let partition1: Vec<String> = (0..half).map(|i| format!("node_{}", i)).collect();
         let partition2: Vec<String> = (half..total_nodes).map(|i| format!("node_{}", i)).collect();
         
-        simulator.create_partition(partition1, partition2).await;
+        simulator.create_partition_by_name(partition1, partition2).await;
     }
     
     /// 创建多数派-少数派分区
@@ -335,7 +374,7 @@ pub mod network_test_utils {
         let minority: Vec<String> = (0..minority_size).map(|i| format!("node_{}", i)).collect();
         let majority: Vec<String> = (minority_size..total_nodes).map(|i| format!("node_{}", i)).collect();
         
-        simulator.create_partition(minority, majority).await;
+        simulator.create_partition_by_name(minority, majority).await;
     }
     
     /// 随机失败节点
@@ -366,7 +405,7 @@ mod tests {
         let partition1 = vec!["node1".to_string(), "node2".to_string()];
         let partition2 = vec!["node3".to_string(), "node4".to_string()];
         
-        simulator.create_partition(partition1, partition2).await;
+        simulator.create_partition_by_name(partition1, partition2).await;
         
         // 验证同一分区内的节点可以通信
         assert!(simulator.can_communicate("node1", "node2").await);

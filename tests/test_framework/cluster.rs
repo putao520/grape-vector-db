@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::path::PathBuf;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 use anyhow::Result;
@@ -13,6 +14,24 @@ use crate::test_framework::{TestNode, NetworkSimulator, ChaosEngine};
 use grape_vector_db::types::*;
 use grape_vector_db::distributed::raft::RaftNode;
 use grape_vector_db::distributed::shard::ShardManager;
+
+/// 集群配置
+#[derive(Debug, Clone)]
+pub struct ClusterConfig {
+    pub cluster_type: ClusterType,
+    pub data_dir: PathBuf,
+    pub node_count: usize,
+}
+
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            cluster_type: ClusterType::Standalone,
+            data_dir: std::env::temp_dir().join("grape_test"),
+            node_count: 1,
+        }
+    }
+}
 
 /// 集群类型
 #[derive(Debug, Clone, PartialEq)]
@@ -66,8 +85,17 @@ pub enum NodeState {
 impl TestCluster {
     /// 创建新的测试集群
     pub async fn new(cluster_type: ClusterType) -> Self {
+        let config = ClusterConfig {
+            cluster_type: cluster_type.clone(),
+            ..Default::default()
+        };
+        Self::new_with_config(config).await
+    }
+    
+    /// 使用配置创建新的测试集群
+    pub async fn new_with_config(config: ClusterConfig) -> Self {
         let cluster_id = Uuid::new_v4().to_string();
-        let node_count = cluster_type.node_count();
+        let node_count = config.node_count;
         
         let mut nodes = Vec::new();
         let mut node_states = HashMap::new();
@@ -75,7 +103,7 @@ impl TestCluster {
         // 创建节点
         for i in 0..node_count {
             let node_id = format!("node_{}", i);
-            let node = TestNode::new(node_id.clone(), cluster_type.clone()).await;
+            let node = TestNode::new(node_id.clone(), config.cluster_type.clone()).await;
             node_states.insert(node_id, NodeState::Stopped);
             nodes.push(node);
         }
@@ -83,7 +111,7 @@ impl TestCluster {
         let network_simulator = Arc::new(NetworkSimulator::new());
         
         Self {
-            cluster_type,
+            cluster_type: config.cluster_type,
             nodes: Arc::new(RwLock::new(nodes)),
             network_simulator: network_simulator.clone(),
             chaos_engine: Arc::new(ChaosEngine::new(network_simulator)),
@@ -109,13 +137,28 @@ impl TestCluster {
     }
     
     /// 停止指定节点
-    pub async fn stop_node(&self, node_id: &str) -> Result<()> {
+    pub async fn stop_node(&self, node_index: usize) -> Result<()> {
         let nodes = self.nodes.read().await;
         let mut node_states = self.node_states.write().await;
         
-        if let Some(node) = nodes.iter().find(|n| n.node_id() == node_id) {
+        if let Some(node) = nodes.get(node_index) {
+            let node_id = node.node_id();
             node.stop().await?;
             node_states.insert(node_id.to_string(), NodeState::Stopped);
+        }
+        
+        Ok(())
+    }
+    
+    /// 启动指定节点
+    pub async fn start_node(&self, node_index: usize) -> Result<()> {
+        let nodes = self.nodes.read().await;
+        let mut node_states = self.node_states.write().await;
+        
+        if let Some(node) = nodes.get(node_index) {
+            let node_id = node.node_id();
+            node.start().await?;
+            node_states.insert(node_id.to_string(), NodeState::Running);
         }
         
         Ok(())
@@ -192,7 +235,7 @@ impl TestCluster {
             .collect();
         
         // 在网络模拟器中创建分区
-        self.network_simulator.create_partition(partition1_ids, partition2_ids).await;
+        self.network_simulator.create_partition_by_name(partition1_ids, partition2_ids).await;
         
         Ok(())
     }
@@ -319,6 +362,60 @@ impl TestCluster {
     /// 获取混沌工程引擎
     pub fn chaos_engine(&self) -> Arc<ChaosEngine> {
         self.chaos_engine.clone()
+    }
+    
+    /// 搜索文档
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<Document>> {
+        if let Ok(leader) = self.wait_for_leader().await {
+            leader.search_documents(query, limit).await
+        } else {
+            // 如果是单节点模式，直接使用第一个节点
+            let nodes = self.nodes.read().await;
+            if let Some(node) = nodes.first() {
+                node.search_documents(query, limit).await
+            } else {
+                anyhow::bail!("无可用节点")
+            }
+        }
+    }
+    
+    /// 在指定节点上搜索文档
+    pub async fn search_documents_on_node(&self, query: &str, limit: usize, node_index: usize) -> Result<Vec<Document>> {
+        let nodes = self.nodes.read().await;
+        if let Some(node) = nodes.get(node_index) {
+            node.search_documents(query, limit).await
+        } else {
+            anyhow::bail!("节点{}不存在", node_index)
+        }
+    }
+    
+    /// 在指定节点上插入文档
+    pub async fn insert_document_on_node(&self, document: Document, node_index: usize) -> Result<()> {
+        let nodes = self.nodes.read().await;
+        if let Some(node) = nodes.get(node_index) {
+            node.insert_document(document).await.map(|_| ())
+        } else {
+            anyhow::bail!("节点{}不存在", node_index)
+        }
+    }
+    
+    /// 删除文档
+    pub async fn delete_document(&self, doc_id: &str) -> Result<()> {
+        if let Ok(leader) = self.wait_for_leader().await {
+            leader.delete_document(doc_id).await
+        } else {
+            let nodes = self.nodes.read().await;
+            if let Some(node) = nodes.first() {
+                node.delete_document(doc_id).await
+            } else {
+                anyhow::bail!("无可用节点")
+            }
+        }
+    }
+    
+    /// 检查集群是否可用
+    pub async fn is_cluster_available(&self) -> bool {
+        self.active_node_count().await > 0
     }
 }
 

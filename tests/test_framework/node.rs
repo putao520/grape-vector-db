@@ -286,6 +286,59 @@ impl TestNode {
         })
     }
     
+    /// 搜索文档
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<Document>> {
+        // 检查节点是否运行
+        if !self.is_running().await {
+            anyhow::bail!("节点未运行");
+        }
+        
+        // 模拟搜索延迟
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        
+        // 简化实现：返回模拟搜索结果
+        let result_count = std::cmp::min(limit, 5); // 最多返回5个结果
+        let mut results = Vec::new();
+        
+        for i in 1..=result_count {
+            results.push(Document {
+                id: format!("search_result_{}", i),
+                title: Some(format!("搜索结果{}", i)),
+                content: format!("包含'{}'的内容", query),
+                language: Some("zh".to_string()),
+                version: Some("1".to_string()),
+                doc_type: Some("search".to_string()),
+                package_name: Some("test".to_string()),
+                vector: None,
+                metadata: std::collections::HashMap::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            });
+        }
+        
+        Ok(results)
+    }
+    
+    /// 删除文档
+    pub async fn delete_document(&self, doc_id: &str) -> Result<()> {
+        // 检查节点是否运行
+        if !self.is_running().await {
+            anyhow::bail!("节点未运行");
+        }
+        
+        // 模拟删除延迟
+        tokio::time::sleep(Duration::from_millis(3)).await;
+        
+        // 在集群模式下，通过Raft提议删除
+        if self.config.enable_raft {
+            let delete_entry = format!("DELETE:{}", doc_id);
+            self.propose_entry(delete_entry.into_bytes()).await?;
+        }
+        
+        // 简化实现：标记删除成功
+        Ok(())
+    }
+    
     /// 获取节点配置
     pub fn get_config(&self) -> &TestNodeConfig {
         &self.config
