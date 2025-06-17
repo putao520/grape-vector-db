@@ -1,12 +1,12 @@
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use parking_lot::RwLock;
 use tracing::debug;
 
 use crate::{
-    types::{SearchResult, VectorDbError},
     storage::VectorStore,
+    types::{SearchResult, VectorDbError},
 };
 
 /// 搜索优化器配置
@@ -39,10 +39,13 @@ impl Default for SearchOptimizerConfig {
     }
 }
 
+/// 类型别名：搜索结果缓存
+type SearchCache = Arc<RwLock<HashMap<String, (Vec<SearchResult>, Instant)>>>;
+
 /// 搜索优化器
 pub struct SearchOptimizer {
     config: SearchOptimizerConfig,
-    cache: Arc<RwLock<HashMap<String, (Vec<SearchResult>, Instant)>>>,
+    cache: SearchCache,
 }
 
 impl SearchOptimizer {
@@ -90,7 +93,7 @@ impl SearchOptimizer {
     /// 缓存搜索结果
     fn cache_results(&self, key: &str, results: Vec<SearchResult>) {
         let mut cache = self.cache.write();
-        
+
         // 清理过期缓存
         let now = Instant::now();
         cache.retain(|_, (_, timestamp)| {
@@ -118,4 +121,4 @@ impl SearchOptimizer {
         let cache = self.cache.read();
         (cache.len(), self.config.cache_size)
     }
-} 
+}

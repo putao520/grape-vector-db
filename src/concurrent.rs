@@ -1,11 +1,11 @@
 // 并发优化模块 - 提供高性能的并发数据结构和操作
-use dashmap::DashMap;
 use crossbeam::channel::{self, Receiver, Sender};
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use rayon::prelude::*;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::hash::Hash;
-use parking_lot::{RwLock, Mutex};
-use rayon::prelude::*;
 
 /// 高性能并发哈希映射，基于DashMap实现
 pub struct ConcurrentHashMap<K, V> {
@@ -13,8 +13,8 @@ pub struct ConcurrentHashMap<K, V> {
     access_counter: AtomicU64,
 }
 
-impl<K, V> ConcurrentHashMap<K, V> 
-where 
+impl<K, V> ConcurrentHashMap<K, V>
+where
     K: Eq + Hash + Clone + Send + Sync,
     V: Clone + Send + Sync,
 {
@@ -60,8 +60,8 @@ where
     }
 
     /// 批量插入
-    pub fn batch_insert(&self, items: Vec<(K, V)>) 
-    where 
+    pub fn batch_insert(&self, items: Vec<(K, V)>)
+    where
         K: Send,
         V: Send,
     {
@@ -83,8 +83,8 @@ where
     }
 }
 
-impl<K, V> Default for ConcurrentHashMap<K, V> 
-where 
+impl<K, V> Default for ConcurrentHashMap<K, V>
+where
     K: Eq + Hash + Clone + Send + Sync,
     V: Clone + Send + Sync,
 {
@@ -257,7 +257,8 @@ impl AtomicCounters {
 
     /// 获取缓存命中率
     pub fn cache_hit_rate(&self) -> f64 {
-        let total_cache_access = self.cache_hits.load(Ordering::Relaxed) + self.cache_misses.load(Ordering::Relaxed);
+        let total_cache_access =
+            self.cache_hits.load(Ordering::Relaxed) + self.cache_misses.load(Ordering::Relaxed);
         if total_cache_access == 0 {
             return 0.0;
         }
@@ -283,16 +284,19 @@ impl Default for AtomicCounters {
     }
 }
 
+/// 类型别名：工作窃取队列类型  
+type StealQueues<T> = Arc<RwLock<Vec<Arc<Mutex<Vec<T>>>>>>;
+
 /// 工作偷取队列，用于任务分发
 pub struct WorkStealingQueue<T> {
     local_queue: Arc<Mutex<Vec<T>>>,
-    steal_queues: Arc<RwLock<Vec<Arc<Mutex<Vec<T>>>>>>,
+    steal_queues: StealQueues<T>,
     worker_id: usize,
     total_workers: AtomicUsize,
 }
 
-impl<T> WorkStealingQueue<T> 
-where 
+impl<T> WorkStealingQueue<T>
+where
     T: Send + Sync,
 {
     /// 创建工作偷取队列系统
@@ -304,7 +308,7 @@ where
         for i in 0..num_workers {
             let local_queue = Arc::new(Mutex::new(Vec::new()));
             steal_queues.write().push(local_queue.clone());
-            
+
             queues.push(Self {
                 local_queue,
                 steal_queues: steal_queues.clone(),
@@ -330,10 +334,11 @@ where
     pub fn steal(&self) -> Option<T> {
         let queues = self.steal_queues.read();
         let total_workers = self.total_workers.load(Ordering::Relaxed);
-        
+
         // 随机选择一个其他工作者的队列
         for _ in 0..total_workers {
-            let target_id = (self.worker_id + 1 + fastrand::usize(0..total_workers - 1)) % total_workers;
+            let target_id =
+                (self.worker_id + 1 + fastrand::usize(0..total_workers - 1)) % total_workers;
             if target_id != self.worker_id {
                 if let Some(queue) = queues.get(target_id) {
                     let mut target_queue = queue.lock();
@@ -375,14 +380,14 @@ pub struct ConcurrentBatchProcessor<T, R> {
     result_queue: MPMCQueue<R>,
 }
 
-impl<T, R> ConcurrentBatchProcessor<T, R> 
-where 
+impl<T, R> ConcurrentBatchProcessor<T, R>
+where
     T: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     /// 创建新的批处理器
-    pub fn new<F>(batch_size: usize, processor: F) -> Self 
-    where 
+    pub fn new<F>(batch_size: usize, processor: F) -> Self
+    where
         F: Fn(Vec<T>) -> Vec<R> + Send + Sync + 'static,
     {
         Self {
@@ -413,7 +418,7 @@ where
 
             std::thread::spawn(move || {
                 let mut batch = Vec::with_capacity(batch_size);
-                
+
                 loop {
                     // 收集批次
                     for _ in 0..batch_size {
@@ -425,8 +430,8 @@ where
 
                     if !batch.is_empty() {
                         // 处理批次
-                        let results = processor(batch.drain(..).collect());
-                        
+                        let results = processor(std::mem::take(&mut batch));
+
                         // 发送结果
                         for result in results {
                             if result_queue.send(result).is_err() {
@@ -453,15 +458,15 @@ mod tests {
     #[test]
     fn test_concurrent_hashmap() {
         let map = ConcurrentHashMap::new();
-        
+
         // 测试插入和获取
         map.insert("key1", "value1");
         assert_eq!(map.get(&"key1").map(|v| v.clone()), Some("value1"));
-        
+
         // 测试批量操作
         let items = vec![("key2", "value2"), ("key3", "value3")];
         map.batch_insert(items);
-        
+
         assert_eq!(map.len(), 3);
         assert!(map.access_count() > 0);
     }
@@ -469,14 +474,14 @@ mod tests {
     #[test]
     fn test_mpmc_queue() {
         let queue = MPMCQueue::bounded(10);
-        
+
         // 测试发送和接收
         queue.send("item1").unwrap();
         queue.send("item2").unwrap();
-        
+
         assert_eq!(queue.receive().unwrap(), "item1");
         assert_eq!(queue.receive().unwrap(), "item2");
-        
+
         assert_eq!(queue.sent_count(), 2);
         assert_eq!(queue.received_count(), 2);
     }
@@ -484,12 +489,12 @@ mod tests {
     #[test]
     fn test_atomic_counters() {
         let counters = AtomicCounters::new();
-        
+
         counters.increment_operations();
         counters.increment_successful_operations();
         counters.increment_cache_hits();
         counters.increment_cache_misses();
-        
+
         assert_eq!(counters.get_operations(), 1);
         assert_eq!(counters.success_rate(), 1.0);
         assert_eq!(counters.cache_hit_rate(), 0.5);
@@ -498,11 +503,11 @@ mod tests {
     #[test]
     fn test_work_stealing_queue() {
         let queues = WorkStealingQueue::new(2);
-        
+
         // 向第一个队列推送任务
         queues[0].push("task1");
         queues[0].push("task2");
-        
+
         // 从第二个队列偷取任务
         let stolen_task = queues[1].steal();
         assert!(stolen_task.is_some());
@@ -515,15 +520,15 @@ mod tests {
         });
 
         processor.start_workers(1);
-        
+
         processor.add_task(1).unwrap();
         processor.add_task(2).unwrap();
-        
+
         std::thread::sleep(Duration::from_millis(100));
-        
+
         let result1 = processor.get_result();
         let result2 = processor.get_result();
-        
+
         assert!(result1.is_ok() || result2.is_ok());
     }
 }

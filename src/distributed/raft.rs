@@ -1,11 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::{interval, timeout};
-use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use tracing::{info, warn, error, debug};
 
 use crate::advanced_storage::AdvancedStorage;
 use crate::types::*;
@@ -51,10 +51,7 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorCommand {
     /// 插入或更新向量
-    Upsert {
-        points: Vec<Point>,
-        shard_id: u32,
-    },
+    Upsert { points: Vec<Point>, shard_id: u32 },
     /// 删除向量
     Delete {
         point_ids: Vec<String>,
@@ -66,9 +63,7 @@ pub enum VectorCommand {
         hash_range: (u64, u64),
     },
     /// 删除分片
-    DropShard {
-        shard_id: u32,
-    },
+    DropShard { shard_id: u32 },
 }
 
 /// 持久化的Raft状态
@@ -220,7 +215,7 @@ impl RaftNode {
     /// 创建新的 Raft 节点
     pub fn new(config: RaftConfig, storage: Arc<AdvancedStorage>) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        
+
         Self {
             config,
             state: Arc::new(RwLock::new(RaftState::Follower)),
@@ -247,7 +242,11 @@ impl RaftNode {
         self.restore_logs().await?;
 
         // 启动主循环
-        let mut command_rx = self.command_rx.write().await.take()
+        let mut command_rx = self
+            .command_rx
+            .write()
+            .await
+            .take()
             .ok_or("命令接收器已被取走")?;
 
         // 启动选举超时定时器
@@ -264,12 +263,12 @@ impl RaftNode {
                 Some(command) = command_rx.recv() => {
                     self.handle_command(command).await?;
                 }
-                
+
                 // 选举超时
                 _ = election_timer.tick() => {
                     self.handle_election_timeout().await?;
                 }
-                
+
                 // 心跳超时
                 _ = heartbeat_timer.tick() => {
                     self.handle_heartbeat_timeout().await?;
@@ -279,17 +278,29 @@ impl RaftNode {
     }
 
     /// 处理命令
-    async fn handle_command(&self, command: RaftCommand) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_command(
+        &self,
+        command: RaftCommand,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match command {
-            RaftCommand::RequestVote { request, response_tx } => {
+            RaftCommand::RequestVote {
+                request,
+                response_tx,
+            } => {
                 let response = self.handle_vote_request(request).await?;
                 let _ = response_tx.send(response);
             }
-            RaftCommand::AppendEntries { request, response_tx } => {
+            RaftCommand::AppendEntries {
+                request,
+                response_tx,
+            } => {
                 let response = self.handle_append_request(request).await?;
                 let _ = response_tx.send(response);
             }
-            RaftCommand::ClientCommand { command, response_tx } => {
+            RaftCommand::ClientCommand {
+                command,
+                response_tx,
+            } => {
                 let result = self.handle_client_command(command).await;
                 let _ = response_tx.send(result);
             }
@@ -304,7 +315,10 @@ impl RaftNode {
     }
 
     /// 处理投票请求
-    async fn handle_vote_request(&self, request: VoteRequest) -> Result<VoteResponse, Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_vote_request(
+        &self,
+        request: VoteRequest,
+    ) -> Result<VoteResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut current_term = self.current_term.write().await;
         let mut voted_for = self.voted_for.write().await;
         let log = self.log.read().await;
@@ -328,8 +342,10 @@ impl RaftNode {
             let last_log_index = log.len() as LogIndex;
             let last_log_term = log.last().map(|entry| entry.term).unwrap_or(0);
 
-            if request.last_log_term > last_log_term ||
-               (request.last_log_term == last_log_term && request.last_log_index >= last_log_index) {
+            if request.last_log_term > last_log_term
+                || (request.last_log_term == last_log_term
+                    && request.last_log_index >= last_log_index)
+            {
                 *voted_for = Some(request.candidate_id.clone());
                 true
             } else {
@@ -349,7 +365,10 @@ impl RaftNode {
     }
 
     /// 处理追加日志请求
-    async fn handle_append_request(&self, request: AppendRequest) -> Result<AppendResponse, Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_append_request(
+        &self,
+        request: AppendRequest,
+    ) -> Result<AppendResponse, Box<dyn std::error::Error + Send + Sync>> {
         let mut current_term = self.current_term.write().await;
         let mut log = self.log.write().await;
         let mut commit_index = self.commit_index.write().await;
@@ -373,7 +392,11 @@ impl RaftNode {
             // 检查前一个日志条目是否匹配
             if request.prev_log_index > log.len() as LogIndex {
                 // 日志不够长，存在缺失
-                debug!("日志缺失: 请求索引 {}, 本地日志长度 {}", request.prev_log_index, log.len());
+                debug!(
+                    "日志缺失: 请求索引 {}, 本地日志长度 {}",
+                    request.prev_log_index,
+                    log.len()
+                );
                 (false, 0)
             } else {
                 let prev_entry = &log[(request.prev_log_index - 1) as usize];
@@ -382,8 +405,10 @@ impl RaftNode {
                     self.handle_log_entries(&mut log, &request).await
                 } else {
                     // 日志冲突，需要回滚
-                    warn!("日志冲突: 索引 {}, 期望任期 {}, 实际任期 {}", 
-                          request.prev_log_index, request.prev_log_term, prev_entry.term);
+                    warn!(
+                        "日志冲突: 索引 {}, 期望任期 {}, 实际任期 {}",
+                        request.prev_log_index, request.prev_log_term, prev_entry.term
+                    );
                     (false, 0)
                 }
             }
@@ -398,7 +423,7 @@ impl RaftNode {
             if new_commit_index > *commit_index {
                 *commit_index = new_commit_index;
                 debug!("更新提交索引到: {}", *commit_index);
-                
+
                 // 异步应用已提交的条目
                 let self_clone = self.clone_for_apply();
                 tokio::spawn(async move {
@@ -419,14 +444,13 @@ impl RaftNode {
     /// 处理客户端命令
     async fn handle_client_command(&self, command: VectorCommand) -> Result<(), String> {
         let state = self.state.read().await;
-        
+
         if *state != RaftState::Leader {
             return Err("只有领导者可以处理客户端命令".to_string());
         }
 
         // 序列化命令
-        let data = bincode::serialize(&command)
-            .map_err(|e| format!("序列化命令失败: {}", e))?;
+        let data = bincode::serialize(&command).map_err(|e| format!("序列化命令失败: {}", e))?;
 
         // 创建日志条目
         let current_term = *self.current_term.read().await;
@@ -442,17 +466,17 @@ impl RaftNode {
         };
 
         log.push(entry.clone());
-        
+
         // 持久化日志条目
         if let Err(e) = self.persist_log_entry(&entry).await {
             warn!("持久化日志条目失败: {}", e);
         }
-        
+
         drop(log); // 释放锁
 
         // 复制到其他节点
         let replication_result = self.replicate_log_entry(entry).await;
-        
+
         match replication_result {
             Ok(_) => {
                 info!("日志条目 {} 复制成功", index);
@@ -466,11 +490,14 @@ impl RaftNode {
     }
 
     /// 复制日志条目到其他节点
-    async fn replicate_log_entry(&self, entry: LogEntry) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn replicate_log_entry(
+        &self,
+        entry: LogEntry,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let peers = self.config.peers.clone();
         let current_term = *self.current_term.read().await;
         let leader_id = self.config.node_id.clone();
-        
+
         // 获取前一个日志索引和任期
         let (prev_log_index, prev_log_term) = {
             let log = self.log.read().await;
@@ -483,7 +510,7 @@ impl RaftNode {
         };
 
         let leader_commit = *self.commit_index.read().await;
-        
+
         // 创建追加请求
         let append_request = AppendRequest {
             term: current_term,
@@ -498,38 +525,38 @@ impl RaftNode {
         let mut success_count = 1; // 包括自己
         let mut handles = Vec::new();
         let timeout_duration = Duration::from_millis(self.config.heartbeat_interval_ms * 2);
-        
+
         for peer_id in peers {
             let request = append_request.clone();
             let node_id = peer_id.clone();
-            
+
             let handle = tokio::spawn(async move {
                 debug!("向节点 {} 发送日志复制请求", node_id);
-                
+
                 // 模拟真实的网络延迟
                 tokio::time::sleep(Duration::from_millis(fastrand::u64(3..15))).await;
-                
+
                 // 使用更可靠的日志复制逻辑
                 // 检查请求的基本有效性
                 let success = if request.term > 0 && !request.entries.is_empty() {
                     // 大多数情况下会成功，除非有明确的冲突
                     match fastrand::u8(0..10) {
-                        0..=8 => true,  // 90%成功率（比原来更高）
-                        _ => false,     // 10%失败率（网络问题、日志冲突等）
+                        0..=8 => true, // 90%成功率（比原来更高）
+                        _ => false,    // 10%失败率（网络问题、日志冲突等）
                     }
                 } else {
                     false // 无效请求直接拒绝
                 };
-                
+
                 if success {
                     debug!("节点 {} 接受日志复制", node_id);
                 } else {
                     warn!("节点 {} 拒绝日志复制或网络失败", node_id);
                 }
-                
+
                 Ok::<bool, Box<dyn std::error::Error + Send + Sync>>(success)
             });
-            
+
             handles.push(handle);
         }
 
@@ -552,15 +579,15 @@ impl RaftNode {
         }
 
         // 检查是否达到多数
-        let required_count = (self.config.peers.len() + 1) / 2 + 1;
-        
+        let required_count = self.config.peers.len().div_ceil(2) + 1;
+
         if success_count >= required_count {
             // 更新提交索引
             let mut commit_index = self.commit_index.write().await;
             if append_request.entries[0].index > *commit_index {
                 *commit_index = append_request.entries[0].index;
                 info!("更新提交索引到: {}", *commit_index);
-                
+
                 // 应用已提交的条目
                 drop(commit_index);
                 self.apply_committed_entries().await?;
@@ -572,10 +599,12 @@ impl RaftNode {
     }
 
     /// 处理选举超时
-    async fn handle_election_timeout(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_election_timeout(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = self.state.read().await;
         let last_heartbeat = *self.last_heartbeat.read().await;
-        
+
         // 添加随机化避免选举冲突，选举超时应该在基础超时的150%-300%之间
         let base_timeout_ms = self.config.election_timeout_ms;
         let randomized_timeout_ms = base_timeout_ms + (fastrand::u64(0..base_timeout_ms * 2));
@@ -592,7 +621,10 @@ impl RaftNode {
         }
 
         drop(state); // 释放读锁
-        info!("选举超时（随机化超时: {}ms），开始新的选举", randomized_timeout_ms);
+        info!(
+            "选举超时（随机化超时: {}ms），开始新的选举",
+            randomized_timeout_ms
+        );
         self.start_election().await
     }
 
@@ -628,7 +660,10 @@ impl RaftNode {
             *last_heartbeat = Instant::now();
         }
 
-        info!("节点 {} 开始选举，任期: {}", self.config.node_id, current_term);
+        info!(
+            "节点 {} 开始选举，任期: {}",
+            self.config.node_id, current_term
+        );
 
         // 获取最后日志信息
         let (last_log_index, last_log_term) = {
@@ -656,34 +691,34 @@ impl RaftNode {
         for peer_id in &self.config.peers {
             let request = vote_request.clone();
             let node_id = peer_id.clone();
-            
+
             let handle = tokio::spawn(async move {
                 debug!("向节点 {} 发送投票请求，任期: {}", node_id, request.term);
-                
+
                 // 模拟真实的网络延迟
                 tokio::time::sleep(Duration::from_millis(fastrand::u64(5..20))).await;
-                
+
                 // 使用更真实的投票逻辑而非完全随机
                 // 在生产环境中应该调用实际的网络层
                 let vote_granted = if request.term > 0 {
                     // 大多数情况下会同意投票，除非有明确理由拒绝
                     match fastrand::u8(0..10) {
-                        0..=7 => true,  // 80%概率同意（比原来更高）
-                        _ => false,     // 20%概率拒绝（网络问题、已投票、任期问题等）
+                        0..=7 => true, // 80%概率同意（比原来更高）
+                        _ => false,    // 20%概率拒绝（网络问题、已投票、任期问题等）
                     }
                 } else {
                     false // 无效任期直接拒绝
                 };
-                
+
                 if vote_granted {
                     debug!("节点 {} 同意投票", node_id);
                 } else {
                     debug!("节点 {} 拒绝投票或网络失败", node_id);
                 }
-                
+
                 Ok::<bool, Box<dyn std::error::Error + Send + Sync>>(vote_granted)
             });
-            
+
             handles.push(handle);
         }
 
@@ -708,19 +743,22 @@ impl RaftNode {
         // 检查是否获得多数票
         let total_nodes = self.config.peers.len() + 1;
         let required_votes = (total_nodes / 2) + 1;
-        
-        info!("选举结果: 获得 {}/{} 票（需要 {} 票）", vote_count, total_nodes, required_votes);
-        
+
+        info!(
+            "选举结果: 获得 {}/{} 票（需要 {} 票）",
+            vote_count, total_nodes, required_votes
+        );
+
         if vote_count >= required_votes {
             info!("节点 {} 获得多数票，成为领导者", self.config.node_id);
             self.become_leader().await?;
         } else {
             info!("节点 {} 选举失败，转为跟随者状态", self.config.node_id);
-            
+
             // 转换回跟随者状态
             let mut state = self.state.write().await;
             *state = RaftState::Follower;
-            
+
             // 清除投票记录，为下次选举做准备
             let mut voted_for = self.voted_for.write().await;
             *voted_for = None;
@@ -730,16 +768,18 @@ impl RaftNode {
     }
 
     /// 处理心跳超时
-    async fn handle_heartbeat_timeout(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_heartbeat_timeout(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = self.state.read().await;
-        
+
         // 只有领导者需要发送心跳
         if *state != RaftState::Leader {
             return Ok(());
         }
 
         debug!("发送心跳");
-        
+
         // 向所有跟随者发送心跳
         self.send_heartbeats().await
     }
@@ -749,7 +789,7 @@ impl RaftNode {
         let current_term = *self.current_term.read().await;
         let leader_id = self.config.node_id.clone();
         let leader_commit = *self.commit_index.read().await;
-        
+
         // 获取最后日志信息
         let (last_log_index, last_log_term) = {
             let log = self.log.read().await;
@@ -772,16 +812,16 @@ impl RaftNode {
                 entries: Vec::new(), // 心跳不包含日志条目
                 leader_commit,
             };
-            
+
             let node_id = peer_id.clone();
-            
+
             let handle = tokio::spawn(async move {
                 // TODO: 这里需要实际的网络调用
                 debug!("向节点 {} 发送心跳", node_id);
                 tokio::time::sleep(Duration::from_millis(5)).await;
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             });
-            
+
             handles.push(handle);
         }
 
@@ -798,7 +838,7 @@ impl RaftNode {
     /// 成为领导者
     pub async fn become_leader(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("节点 {} 成为领导者", self.config.node_id);
-        
+
         {
             let mut state = self.state.write().await;
             *state = RaftState::Leader;
@@ -843,7 +883,9 @@ impl RaftNode {
     }
 
     /// 应用已提交的日志条目
-    async fn apply_committed_entries(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn apply_committed_entries(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let commit_index = *self.commit_index.read().await;
         let mut last_applied = self.last_applied.write().await;
         let log = self.log.read().await;
@@ -851,7 +893,7 @@ impl RaftNode {
         while *last_applied < commit_index {
             *last_applied += 1;
             let entry = &log[(*last_applied - 1) as usize];
-            
+
             // 应用日志条目
             if let Ok(command) = bincode::deserialize::<VectorCommand>(&entry.data) {
                 self.apply_command(command).await?;
@@ -865,44 +907,49 @@ impl RaftNode {
     pub async fn persist_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let current_term = *self.current_term.read().await;
         let voted_for = self.voted_for.read().await.clone();
-        
+
         // 构建状态对象
         let raft_state = PersistentRaftState {
             current_term,
             voted_for: voted_for.clone(),
             last_log_index: self.log.read().await.len() as LogIndex,
         };
-        
+
         // 序列化状态
         let state_data = serde_json::to_vec(&raft_state)?;
-        
+
         // 存储到持久化存储
         let state_key = format!("raft_state_{}", self.config.node_id);
         self.storage.put(state_key.as_bytes(), &state_data)?;
-        
-        debug!("Raft状态已持久化: 任期={}, 投票给={:?}", current_term, voted_for);
+
+        debug!(
+            "Raft状态已持久化: 任期={}, 投票给={:?}",
+            current_term, voted_for
+        );
         Ok(())
     }
-    
+
     /// 从持久化存储恢复Raft状态
     pub async fn restore_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_key = format!("raft_state_{}", self.config.node_id);
-        
+
         match self.storage.get(state_key.as_bytes()) {
             Ok(Some(state_data)) => {
                 let raft_state: PersistentRaftState = serde_json::from_slice(&state_data)?;
-                
+
                 // 保存状态的副本用于日志
-                let current_term = raft_state.current_term;
-                let voted_for = raft_state.voted_for.clone();
-                
+                let _current_term = raft_state.current_term;
+                let _voted_for = raft_state.voted_for.clone();
+
                 // 恢复状态
                 *self.current_term.write().await = raft_state.current_term;
                 let voted_for_clone = raft_state.voted_for.clone();
                 *self.voted_for.write().await = raft_state.voted_for;
-                
-                info!("Raft状态已恢复: 任期={}, 投票给={:?}", 
-                      raft_state.current_term, voted_for_clone);
+
+                info!(
+                    "Raft状态已恢复: 任期={}, 投票给={:?}",
+                    raft_state.current_term, voted_for_clone
+                );
             }
             Ok(None) => {
                 info!("未找到持久化的Raft状态，使用默认状态");
@@ -911,58 +958,76 @@ impl RaftNode {
                 warn!("恢复Raft状态失败: {}", e);
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// 持久化日志条目
-    async fn persist_log_entry(&self, entry: &LogEntry) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn persist_log_entry(
+        &self,
+        entry: &LogEntry,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let log_key = format!("raft_log_{}_{}", self.config.node_id, entry.index);
         let log_data = bincode::serialize(entry)?;
-        
+
         self.storage.put(log_key.as_bytes(), &log_data)?;
-        
-        debug!("日志条目已持久化: 索引={}, 任期={}", entry.index, entry.term);
+
+        debug!(
+            "日志条目已持久化: 索引={}, 任期={}",
+            entry.index, entry.term
+        );
         Ok(())
     }
-    
+
     /// 从持久化存储恢复日志
     async fn restore_logs(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 这里应该扫描所有日志条目并按索引排序
         // 由于我们使用的是简化的存储接口，这里实现一个基本版本
         info!("开始恢复Raft日志");
-        
+
         // 在实际实现中，这里需要：
         // 1. 扫描所有raft_log_前缀的键
         // 2. 解析日志索引并排序
         // 3. 重建日志数组
-        
+
         // 暂时记录日志以表示功能已实现
         debug!("日志恢复完成（当前为简化实现）");
         Ok(())
     }
 
     /// 应用命令到状态机
-    async fn apply_command(&self, command: VectorCommand) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn apply_command(
+        &self,
+        command: VectorCommand,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match command {
-            VectorCommand::Upsert { points, shard_id: _ } => {
+            VectorCommand::Upsert {
+                points,
+                shard_id: _,
+            } => {
                 // 应用向量插入/更新
                 for point in points {
                     self.storage.store_vector(&point)?;
                 }
                 info!("应用向量插入/更新命令完成");
             }
-            VectorCommand::Delete { point_ids, shard_id: _ } => {
+            VectorCommand::Delete {
+                point_ids,
+                shard_id: _,
+            } => {
                 // 应用向量删除
                 for point_id in point_ids {
                     self.storage.delete_vector(&point_id)?;
                 }
                 info!("应用向量删除命令完成");
             }
-            VectorCommand::CreateShard { shard_id, hash_range } => {
+            VectorCommand::CreateShard {
+                shard_id,
+                hash_range,
+            } => {
                 // 创建分片
                 info!("创建分片: {}, 哈希范围: {:?}", shard_id, hash_range);
-                
+
                 // 在存储引擎中创建分片相关的数据结构
                 let _shard_key = format!("shard_{}", shard_id);
                 let shard_info = serde_json::json!({
@@ -971,36 +1036,36 @@ impl RaftNode {
                     "created_at": chrono::Utc::now().timestamp(),
                     "status": "active"
                 });
-                
+
                 // 使用存储引擎存储分片元数据
                 let metadata_key = format!("shard_metadata_{}", shard_id);
                 let metadata_value = serde_json::to_vec(&shard_info)?;
-                
+
                 // 这里可以扩展为使用特定的分片存储逻辑
                 // 暂时使用通用存储接口
                 self.storage.put(metadata_key.as_bytes(), &metadata_value)?;
-                
+
                 info!("分片 {} 创建完成", shard_id);
             }
             VectorCommand::DropShard { shard_id } => {
                 // 删除分片
                 info!("删除分片: {}", shard_id);
-                
+
                 // 删除分片相关的所有数据
                 let metadata_key = format!("shard_metadata_{}", shard_id);
-                
+
                 // 删除分片元数据
                 self.storage.delete(metadata_key.as_bytes())?;
-                
+
                 // 删除分片中的所有向量数据
                 // 这里需要遍历分片中的所有向量并删除
                 // 由于我们使用的是通用存储接口，这里实现一个简化版本
                 let shard_prefix = format!("shard_{}_", shard_id);
-                
+
                 // 在实际实现中，这里应该遍历并删除所有以分片前缀开头的键
                 // 暂时记录日志
                 info!("清理分片 {} 的数据（前缀: {}）", shard_id, shard_prefix);
-                
+
                 info!("分片 {} 删除完成", shard_id);
             }
         }
@@ -1009,7 +1074,11 @@ impl RaftNode {
     }
 
     /// 处理日志条目追加和冲突解决
-    async fn handle_log_entries(&self, log: &mut Vec<LogEntry>, request: &AppendRequest) -> (bool, LogIndex) {
+    async fn handle_log_entries(
+        &self,
+        log: &mut Vec<LogEntry>,
+        request: &AppendRequest,
+    ) -> (bool, LogIndex) {
         if request.entries.is_empty() {
             // 这是心跳请求，没有日志条目
             return (true, log.len() as LogIndex);
@@ -1018,10 +1087,10 @@ impl RaftNode {
         // 查找第一个冲突的日志条目
         let mut conflict_index = None;
         let start_index = request.prev_log_index as usize;
-        
+
         for (i, new_entry) in request.entries.iter().enumerate() {
             let log_index = start_index + i;
-            
+
             if log_index < log.len() {
                 if log[log_index].term != new_entry.term {
                     conflict_index = Some(log_index);
@@ -1045,7 +1114,7 @@ impl RaftNode {
         // 追加新的日志条目
         for new_entry in &request.entries {
             log.push(new_entry.clone());
-            
+
             // 持久化新的日志条目
             if let Err(e) = self.persist_log_entry(new_entry).await {
                 warn!("持久化日志条目失败: {}", e);
@@ -1076,16 +1145,20 @@ impl RaftNode {
     }
 
     /// 日志压缩
-    pub async fn compact_log(&self, last_included_index: LogIndex, last_included_term: Term) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn compact_log(
+        &self,
+        last_included_index: LogIndex,
+        last_included_term: Term,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut log = self.log.write().await;
-        
-        if last_included_index <= 0 || last_included_index > log.len() as LogIndex {
+
+        if last_included_index == 0 || last_included_index > log.len() as LogIndex {
             return Err(format!("无效的压缩索引: {}", last_included_index).into());
         }
 
         // 保留压缩点之后的日志条目
         let entries_to_keep = log.split_off(last_included_index as usize);
-        
+
         // 创建快照条目
         let snapshot_entry = LogEntry {
             index: last_included_index,
@@ -1105,7 +1178,11 @@ impl RaftNode {
             warn!("持久化压缩状态失败: {}", e);
         }
 
-        info!("日志压缩完成，压缩到索引 {}，当前日志长度: {}", last_included_index, log.len());
+        info!(
+            "日志压缩完成，压缩到索引 {}，当前日志长度: {}",
+            last_included_index,
+            log.len()
+        );
         Ok(())
     }
 
@@ -1113,7 +1190,7 @@ impl RaftNode {
     pub async fn should_compact_log(&self) -> bool {
         let log = self.log.read().await;
         let last_applied = *self.last_applied.read().await;
-        
+
         // 如果日志长度超过1000且已应用的条目超过总数的50%，则进行压缩
         log.len() > 1000 && last_applied > log.len() as LogIndex / 2
     }
@@ -1126,18 +1203,18 @@ impl RaftNode {
 
         let last_applied = *self.last_applied.read().await;
         let log = self.log.read().await;
-        
+
         if last_applied > 0 && (last_applied as usize) < log.len() {
             let last_applied_entry = &log[(last_applied - 1) as usize];
             let compact_index = last_applied;
             let compact_term = last_applied_entry.term;
-            
+
             drop(log); // 释放读锁
-            
+
             self.compact_log(compact_index, compact_term).await?;
             info!("自动日志压缩完成");
         }
-        
+
         Ok(())
     }
 
@@ -1180,4 +1257,4 @@ impl RaftNode {
             None
         }
     }
-} 
+}

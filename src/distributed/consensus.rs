@@ -1,14 +1,14 @@
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, mpsc, oneshot};
-use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error, debug};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
-use crate::distributed::raft::{RaftNode, RaftState};
-use crate::types::{ClusterInfo, NodeInfo, Term, LogIndex, NodeId};
-use crate::distributed::network::NetworkManager;
 use crate::advanced_storage::AdvancedStorage;
+use crate::distributed::network::NetworkManager;
+use crate::distributed::raft::{RaftNode, RaftState};
+use crate::types::{ClusterInfo, NodeId, NodeInfo, Term};
 
 /// 共识管理器
 pub struct ConsensusManager {
@@ -52,12 +52,13 @@ impl Default for ConsensusState {
             leader_id: None,
             last_heartbeat: Instant::now(),
             election_timeout: Duration::from_millis(150 + rand::random::<u64>() % 150), // 150-300ms
-            heartbeat_interval: Duration::from_millis(50), // 50ms
+            heartbeat_interval: Duration::from_millis(50),                              // 50ms
         }
     }
 }
 
 /// 命令处理器
+#[allow(dead_code)]
 pub struct CommandHandler {
     /// 存储引擎
     storage: Arc<AdvancedStorage>,
@@ -79,26 +80,18 @@ pub enum ConsensusCommand {
         node_info: NodeInfo,
     },
     /// 分片操作
-    ShardOperation {
-        operation: ShardOperation,
-    },
+    ShardOperation { operation: ShardOperation },
 }
 
 /// 向量操作
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VectorOperation {
     /// 插入向量
-    Upsert {
-        points: Vec<crate::types::Point>,
-    },
+    Upsert { points: Vec<crate::types::Point> },
     /// 删除向量
-    Delete {
-        point_ids: Vec<String>,
-    },
+    Delete { point_ids: Vec<String> },
     /// 批量操作
-    Batch {
-        operations: Vec<VectorOperation>,
-    },
+    Batch { operations: Vec<VectorOperation> },
 }
 
 /// 配置变更类型
@@ -142,10 +135,7 @@ pub enum CommandResult {
         data: Option<serde_json::Value>,
     },
     /// 失败
-    Error {
-        error: String,
-        code: u32,
-    },
+    Error { error: String, code: u32 },
 }
 
 impl ConsensusManager {
@@ -220,7 +210,9 @@ impl ConsensusManager {
                         &raft_node,
                         &network_manager,
                         &cluster_info,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("选举失败: {}", e);
                     }
                 }
@@ -256,7 +248,9 @@ impl ConsensusManager {
                         &raft_node,
                         &network_manager,
                         &cluster_info,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("发送心跳失败: {}", e);
                     }
                 }
@@ -272,34 +266,41 @@ impl ConsensusManager {
         tokio::spawn(async move {
             info!("启动命令处理循环");
             let mut last_applied = 0;
-            
+
             loop {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                
+
                 // 检查是否有新的已提交条目需要应用
                 let commit_index = raft_node.get_commit_index().await;
-                
+
                 if commit_index > last_applied {
                     // 应用从 last_applied+1 到 commit_index 的所有条目
                     for index in (last_applied + 1)..=commit_index {
                         if let Some(entry) = raft_node.get_log_entry(index).await {
-                            match bincode::deserialize::<crate::distributed::raft::VectorCommand>(&entry.data) {
+                            match bincode::deserialize::<crate::distributed::raft::VectorCommand>(
+                                &entry.data,
+                            ) {
                                 Ok(vector_command) => {
                                     // 将 VectorCommand 转换为 ConsensusCommand
                                     let consensus_command = match vector_command {
-                                        crate::distributed::raft::VectorCommand::Upsert { points, shard_id } => {
-                                            ConsensusCommand::VectorOperation {
-                                                operation: VectorOperation::Upsert { points },
-                                                shard_id,
-                                            }
-                                        }
-                                        crate::distributed::raft::VectorCommand::Delete { point_ids, shard_id } => {
-                                            ConsensusCommand::VectorOperation {
-                                                operation: VectorOperation::Delete { point_ids },
-                                                shard_id,
-                                            }
-                                        }
-                                        crate::distributed::raft::VectorCommand::CreateShard { shard_id, hash_range: _ } => {
+                                        crate::distributed::raft::VectorCommand::Upsert {
+                                            points,
+                                            shard_id,
+                                        } => ConsensusCommand::VectorOperation {
+                                            operation: VectorOperation::Upsert { points },
+                                            shard_id,
+                                        },
+                                        crate::distributed::raft::VectorCommand::Delete {
+                                            point_ids,
+                                            shard_id,
+                                        } => ConsensusCommand::VectorOperation {
+                                            operation: VectorOperation::Delete { point_ids },
+                                            shard_id,
+                                        },
+                                        crate::distributed::raft::VectorCommand::CreateShard {
+                                            shard_id,
+                                            hash_range: _,
+                                        } => {
                                             // 暂时使用一个默认节点，实际应该根据集群状态决定
                                             let primary_node = raft_node.get_node_id().clone();
                                             ConsensusCommand::ShardOperation {
@@ -310,15 +311,19 @@ impl ConsensusManager {
                                                 },
                                             }
                                         }
-                                        crate::distributed::raft::VectorCommand::DropShard { shard_id } => {
+                                        crate::distributed::raft::VectorCommand::DropShard {
+                                            shard_id,
+                                        } => {
                                             // 创建一个删除分片的迁移操作
                                             warn!("DropShard命令暂不支持，忽略分片 {}", shard_id);
                                             last_applied = index;
                                             continue;
                                         }
                                     };
-                                    
-                                    if let Err(e) = command_handler.execute_command(consensus_command).await {
+
+                                    if let Err(e) =
+                                        command_handler.execute_command(consensus_command).await
+                                    {
                                         error!("执行命令失败: {}", e);
                                     } else {
                                         last_applied = index;
@@ -358,7 +363,9 @@ impl ConsensusManager {
         // 获取集群中的其他节点
         let other_nodes = {
             let cluster = cluster_info.read().await;
-            cluster.nodes.values()
+            cluster
+                .nodes
+                .values()
                 .filter(|node| node.id != node_id)
                 .cloned()
                 .collect::<Vec<_>>()
@@ -374,8 +381,8 @@ impl ConsensusManager {
         }
 
         // 获取需要的票数
-        let votes_needed = (other_nodes.len() + 1) / 2 + 1; // 过半数
-        
+        let votes_needed = other_nodes.len().div_ceil(2) + 1; // 过半数
+
         // 并行发送投票请求
         let mut vote_tasks = Vec::new();
         for node in &other_nodes {
@@ -389,7 +396,10 @@ impl ConsensusManager {
             };
 
             let task = tokio::spawn(async move {
-                match network_manager.send_vote_request(&node_id_for_request, vote_request).await {
+                match network_manager
+                    .send_vote_request(&node_id_for_request, vote_request)
+                    .await
+                {
                     Ok(response) => Some((node_id_for_request.clone(), response)),
                     Err(e) => {
                         warn!("向节点 {} 发送投票请求失败: {}", node_id_for_request, e);
@@ -410,7 +420,7 @@ impl ConsensusManager {
                     debug!("收到节点 {} 的投票", node_id);
                 } else {
                     debug!("节点 {} 拒绝投票，任期: {}", node_id, response.term);
-                    
+
                     // 如果对方任期更高，转换为跟随者
                     if response.term > current_term {
                         let mut state = consensus_state.write().await;
@@ -441,7 +451,10 @@ impl ConsensusManager {
             let mut state = consensus_state.write().await;
             state.state = RaftState::Follower;
             state.voted_for = None;
-            info!("选举失败，获得 {} 票，需要 {} 票", votes_received, votes_needed);
+            info!(
+                "选举失败，获得 {} 票，需要 {} 票",
+                votes_received, votes_needed
+            );
         }
 
         Ok(())
@@ -462,7 +475,9 @@ impl ConsensusManager {
         // 获取集群中的其他节点
         let other_nodes = {
             let cluster = cluster_info.read().await;
-            cluster.nodes.values()
+            cluster
+                .nodes
+                .values()
                 .filter(|node| node.id != node_id)
                 .cloned()
                 .collect::<Vec<_>>()
@@ -475,14 +490,17 @@ impl ConsensusManager {
             let append_request = crate::distributed::raft::AppendRequest {
                 term: current_term,
                 leader_id: node_id.clone(),
-                prev_log_index: 0, // TODO: 获取实际的前一个日志索引
-                prev_log_term: 0,  // TODO: 获取实际的前一个日志任期
+                prev_log_index: 0,   // TODO: 获取实际的前一个日志索引
+                prev_log_term: 0,    // TODO: 获取实际的前一个日志任期
                 entries: Vec::new(), // 心跳不包含日志条目
-                leader_commit: 0,  // TODO: 获取实际的领导者提交索引
+                leader_commit: 0,    // TODO: 获取实际的领导者提交索引
             };
 
             let task = tokio::spawn(async move {
-                match network_manager.send_append_request(&node.id, append_request).await {
+                match network_manager
+                    .send_append_request(&node.id, append_request)
+                    .await
+                {
                     Ok(response) => Some((node.id, response)),
                     Err(e) => {
                         warn!("向节点 {} 发送心跳失败: {}", node.id, e);
@@ -498,7 +516,7 @@ impl ConsensusManager {
             if let Ok(Some((node_id, response))) = task.await {
                 if !response.success {
                     debug!("节点 {} 心跳响应失败，任期: {}", node_id, response.term);
-                    
+
                     // 如果对方任期更高，转换为跟随者
                     if response.term > current_term {
                         let mut state = consensus_state.write().await;
@@ -519,7 +537,10 @@ impl ConsensusManager {
     }
 
     /// 提交命令
-    pub async fn submit_command(&self, command: ConsensusCommand) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn submit_command(
+        &self,
+        command: ConsensusCommand,
+    ) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         // 检查是否是领导者
         let is_leader = {
             let state = self.consensus_state.read().await;
@@ -567,14 +588,19 @@ impl ConsensusManager {
 
 impl CommandHandler {
     /// 执行命令
-    pub async fn execute_command(&self, command: ConsensusCommand) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn execute_command(
+        &self,
+        command: ConsensusCommand,
+    ) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         match command {
-            ConsensusCommand::VectorOperation { operation, shard_id } => {
-                self.execute_vector_operation(operation, shard_id).await
-            }
-            ConsensusCommand::ConfigChange { change_type, node_info } => {
-                self.execute_config_change(change_type, node_info).await
-            }
+            ConsensusCommand::VectorOperation {
+                operation,
+                shard_id,
+            } => self.execute_vector_operation(operation, shard_id).await,
+            ConsensusCommand::ConfigChange {
+                change_type,
+                node_info,
+            } => self.execute_config_change(change_type, node_info).await,
             ConsensusCommand::ShardOperation { operation } => {
                 self.execute_shard_operation(operation).await
             }
@@ -582,7 +608,11 @@ impl CommandHandler {
     }
 
     /// 执行向量操作
-    async fn execute_vector_operation(&self, operation: VectorOperation, shard_id: u32) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
+    async fn execute_vector_operation(
+        &self,
+        operation: VectorOperation,
+        shard_id: u32,
+    ) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         match operation {
             VectorOperation::Upsert { points } => {
                 for point in points {
@@ -620,7 +650,11 @@ impl CommandHandler {
     }
 
     /// 执行配置变更
-    async fn execute_config_change(&self, change_type: ConfigChangeType, node_info: NodeInfo) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
+    async fn execute_config_change(
+        &self,
+        change_type: ConfigChangeType,
+        node_info: NodeInfo,
+    ) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         match change_type {
             ConfigChangeType::AddNode => {
                 info!("添加节点: {}", node_info.id);
@@ -650,9 +684,16 @@ impl CommandHandler {
     }
 
     /// 执行分片操作
-    async fn execute_shard_operation(&self, operation: ShardOperation) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
+    async fn execute_shard_operation(
+        &self,
+        operation: ShardOperation,
+    ) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         match operation {
-            ShardOperation::CreateShard { shard_id, primary_node, replica_nodes: _ } => {
+            ShardOperation::CreateShard {
+                shard_id,
+                primary_node,
+                replica_nodes: _,
+            } => {
                 info!("创建分片: {}, 主节点: {}", shard_id, primary_node);
                 // TODO: 实现分片创建逻辑
                 Ok(CommandResult::Success {
@@ -660,7 +701,11 @@ impl CommandHandler {
                     data: None,
                 })
             }
-            ShardOperation::MigrateShard { shard_id, from_node, to_node } => {
+            ShardOperation::MigrateShard {
+                shard_id,
+                from_node,
+                to_node,
+            } => {
                 info!("迁移分片: {} 从 {} 到 {}", shard_id, from_node, to_node);
                 // TODO: 实现分片迁移逻辑
                 Ok(CommandResult::Success {
@@ -678,4 +723,4 @@ impl CommandHandler {
             }
         }
     }
-} 
+}

@@ -1,39 +1,36 @@
-use grape_vector_db::{
-    VectorDatabase, VectorDbConfig, Document,
-    errors::Result,
-};
-use std::time::Instant;
+use chrono;
+use grape_vector_db::{errors::Result, Document, VectorDatabase, VectorDbConfig};
+use rand;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio;
 use tracing::error;
-use chrono;
-use rand;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 初始化日志
     tracing_subscriber::fmt::init();
-    
+
     println!("🚀 Grape Vector DB 性能优化测试 (文本搜索模式)");
     println!("====================================");
-    
+
     // 创建数据库配置
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./performance_test_data");
     let db = VectorDatabase::new(data_dir, config).await?;
-    
+
     // 准备测试数据 - 使用批量操作优化性能
     println!("📦 准备测试数据...");
     let start_prep = Instant::now();
-    
+
     let doc_count = 1000; // 减少到1000个文档
     let batch_size = 100; // 每批插入100个文档
-    
+
     for batch_start in (0..doc_count).step_by(batch_size) {
         let batch_end = std::cmp::min(batch_start + batch_size, doc_count);
         let mut batch_docs = Vec::new();
-        
+
         for i in batch_start..batch_end {
             let doc = Document {
                 id: format!("perf_doc_{}", i),
@@ -55,21 +52,21 @@ async fn main() -> Result<()> {
             };
             batch_docs.push(doc);
         }
-        
+
         db.batch_add_documents(batch_docs).await?;
         println!("  已添加 {} 个文档", batch_end);
     }
-    
+
     let prep_time = start_prep.elapsed();
     println!("✅ 数据准备完成，耗时: {:?}", prep_time);
     println!();
-    
+
     // 新增：并发插入性能测试
     run_concurrent_insertion_test(&db).await?;
-    
+
     // 性能测试 - 使用文本搜索而不是向量搜索
     run_performance_tests(&db).await?;
-    
+
     Ok(())
 }
 
@@ -77,12 +74,12 @@ async fn main() -> Result<()> {
 async fn run_concurrent_insertion_test(db: &VectorDatabase) -> Result<()> {
     println!("⚡ 并发插入性能测试");
     println!("====================");
-    
+
     let insertion_sizes = vec![10, 20, 50, 100];
-    
+
     for doc_count in insertion_sizes {
         println!("📦 测试并发插入 {} 个文档", doc_count);
-        
+
         // 准备测试文档
         let mut documents = Vec::new();
         for i in 0..doc_count {
@@ -106,19 +103,23 @@ async fn run_concurrent_insertion_test(db: &VectorDatabase) -> Result<()> {
             };
             documents.push(doc);
         }
-        
+
         // 测试1: 批量插入
         let start_batch = Instant::now();
         let _batch_ids = db.batch_add_documents(documents.clone()).await?;
         let batch_time = start_batch.elapsed();
-        
-        println!("  📋 批量插入: {:?} ({:.2} docs/sec)", batch_time, doc_count as f64 / batch_time.as_secs_f64());
-        
+
+        println!(
+            "  📋 批量插入: {:?} ({:.2} docs/sec)",
+            batch_time,
+            doc_count as f64 / batch_time.as_secs_f64()
+        );
+
         // 清理测试数据
         for doc in &documents {
             let _ = db.delete_document(&doc.id).await;
         }
-        
+
         // 性能评估
         if batch_time.as_secs_f64() < 1.0 {
             println!("    ✅ 性能优秀 (< 1秒)");
@@ -129,10 +130,10 @@ async fn run_concurrent_insertion_test(db: &VectorDatabase) -> Result<()> {
         } else {
             println!("    ❌ 性能需要优化 (>= 5秒)");
         }
-        
+
         println!();
     }
-    
+
     Ok(())
 }
 
@@ -148,36 +149,36 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
         ("查询", 60),
         ("优化", 80),
     ];
-    
+
     println!("🔥 开始性能测试 (文本搜索)");
     println!("================");
-    
+
     let mut total_time = 0.0;
     let mut total_searches = 0;
     let mut failed_searches = 0;
-    
+
     for (query, limit) in test_queries {
         println!("🔍 测试查询: \"{}\" (limit: {})", query, limit);
-        
+
         // 预热 - 使用文本搜索
         for i in 0..3 {
             match db.text_search(query, limit).await {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     println!("  ⚠️ 预热搜索 {} 失败: {}", i + 1, e);
                     continue;
                 }
             }
         }
-        
+
         // 实际测试
         let mut query_times = Vec::new();
         let test_rounds = 20;
         let mut successful_rounds = 0;
-        
+
         for round in 0..test_rounds {
             let start = Instant::now();
-            
+
             match db.text_search(query, limit).await {
                 Ok(results) => {
                     let elapsed = start.elapsed();
@@ -185,35 +186,41 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
                     total_time += elapsed.as_millis() as f64;
                     total_searches += 1;
                     successful_rounds += 1;
-                    
+
                     if round == 0 {
                         println!("  首次搜索: 找到 {} 个结果", results.len());
                     }
-                },
+                }
                 Err(e) => {
                     failed_searches += 1;
                     error!("搜索失败 (round {}): {}", round + 1, e);
                 }
             }
         }
-        
+
         if query_times.is_empty() {
             println!("  ❌ 所有搜索都失败了");
             continue;
         }
-        
+
         // 统计分析
         query_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
+
         let avg_time = query_times.iter().sum::<f64>() / query_times.len() as f64;
         let min_time = query_times.first().copied().unwrap_or(0.0);
         let max_time = query_times.last().copied().unwrap_or(0.0);
-        let p95_time = query_times.get((query_times.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0);
+        let p95_time = query_times
+            .get((query_times.len() as f64 * 0.95) as usize)
+            .copied()
+            .unwrap_or(0.0);
         let qps = 1000.0 / avg_time;
         let success_rate = successful_rounds as f64 / test_rounds as f64 * 100.0;
-        
+
         println!("  📊 性能统计:");
-        println!("    成功率:   {:.1}% ({}/{})", success_rate, successful_rounds, test_rounds);
+        println!(
+            "    成功率:   {:.1}% ({}/{})",
+            success_rate, successful_rounds, test_rounds
+        );
         println!("    平均延迟: {:.2} ms", avg_time);
         println!("    最小延迟: {:.2} ms", min_time);
         println!("    最大延迟: {:.2} ms", max_time);
@@ -221,13 +228,14 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
         println!("    QPS:      {:.0}", qps);
         println!();
     }
-    
+
     // 总体统计
     if total_searches > 0 {
         let overall_avg = total_time / total_searches as f64;
         let overall_qps = 1000.0 / overall_avg;
-        let overall_success_rate = total_searches as f64 / (total_searches + failed_searches) as f64 * 100.0;
-        
+        let overall_success_rate =
+            total_searches as f64 / (total_searches + failed_searches) as f64 * 100.0;
+
         println!("🎯 总体性能统计");
         println!("================");
         println!("  总搜索次数: {}", total_searches);
@@ -235,7 +243,7 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
         println!("  成功率:     {:.1}%", overall_success_rate);
         println!("  平均延迟:   {:.2} ms", overall_avg);
         println!("  整体QPS:    {:.0}", overall_qps);
-        
+
         // 性能评级
         if overall_qps >= 1000.0 {
             println!("  🏆 性能等级: 优秀 (QPS >= 1000)");
@@ -249,33 +257,33 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
     } else {
         println!("❌ 所有搜索都失败了，无法生成性能统计");
     }
-    
+
     // 并发测试
     println!();
     println!("🔄 并发性能测试 (文本搜索)");
     println!("================");
-    
+
     run_concurrent_test().await?;
-    
+
     Ok(())
 }
 
 async fn run_concurrent_test() -> Result<()> {
     use tokio::task::JoinSet;
-    
+
     let concurrent_levels = vec![1, 5, 10, 20, 50]; // Add 50 concurrent test
-    
+
     // 创建共享的数据库连接（避免重复创建连接的开销）
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./performance_test_data");
     let shared_db = Arc::new(VectorDatabase::new(data_dir, config).await?);
-    
+
     for concurrency in concurrent_levels {
         println!("🔄 并发级别: {}", concurrency);
-        
+
         let start_time = Instant::now();
         let mut join_set = JoinSet::new();
-        
+
         for i in 0..concurrency {
             let query = format!("并发测试 {}", i);
             let db_clone = shared_db.clone();
@@ -292,14 +300,16 @@ async fn run_concurrent_test() -> Result<()> {
                         }
                     }
                 }
-                
-                Err(grape_vector_db::VectorDbError::QueryError("所有重试都失败了".to_string()))
+
+                Err(grape_vector_db::VectorDbError::QueryError(
+                    "所有重试都失败了".to_string(),
+                ))
             });
         }
-        
+
         let mut successful_searches = 0;
         let mut failed_searches = 0;
-        
+
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(_)) => successful_searches += 1,
@@ -313,17 +323,21 @@ async fn run_concurrent_test() -> Result<()> {
                 }
             }
         }
-        
+
         let total_time = start_time.elapsed();
         let concurrent_qps = successful_searches as f64 / total_time.as_secs_f64();
-        let success_rate = successful_searches as f64 / (successful_searches + failed_searches) as f64 * 100.0;
-        
-        println!("  成功: {} / 失败: {}", successful_searches, failed_searches);
+        let success_rate =
+            successful_searches as f64 / (successful_searches + failed_searches) as f64 * 100.0;
+
+        println!(
+            "  成功: {} / 失败: {}",
+            successful_searches, failed_searches
+        );
         println!("  成功率: {:.1}%", success_rate);
         println!("  总耗时: {:?}", total_time);
         println!("  并发QPS: {:.0}", concurrent_qps);
         println!();
     }
-    
+
     Ok(())
-} 
+}

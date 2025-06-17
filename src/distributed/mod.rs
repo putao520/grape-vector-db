@@ -1,11 +1,11 @@
-pub mod raft;
 pub mod cluster;
-pub mod shard;
-pub mod network;
 pub mod consensus;
- 
-pub use raft::*;
+pub mod network;
+pub mod raft;
+pub mod shard;
+
 pub use cluster::*;
-pub use shard::*;
+pub use consensus::*;
 pub use network::*;
-pub use consensus::*; 
+pub use raft::*;
+pub use shard::*;

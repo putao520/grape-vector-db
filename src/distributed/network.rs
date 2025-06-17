@@ -1,14 +1,17 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{RwLock, mpsc, oneshot};
-use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error, debug};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
-use crate::distributed::raft::{RaftNode, VoteRequest, VoteResponse, AppendRequest, AppendResponse};
-use crate::types::{NodeId, NodeInfo, ClusterInfo, HeartbeatMessage};
+use crate::distributed::raft::{
+    AppendRequest, AppendResponse, RaftNode, VoteRequest, VoteResponse,
+};
+use crate::types::{ClusterInfo, HeartbeatMessage, NodeId, NodeInfo};
 
 /// 网络管理器
+#[allow(dead_code)]
 pub struct NetworkManager {
     /// 本地节点信息
     local_node: NodeInfo,
@@ -93,17 +96,23 @@ impl NetworkManager {
     }
 
     /// 启动网络服务
-    pub async fn start(&mut self, bind_address: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(
+        &mut self,
+        bind_address: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("启动网络服务，绑定地址: {}", bind_address);
 
         // TODO: 启动 HTTP 服务器
         // 这里可以使用 axum 或 warp 来创建 HTTP API 服务器
-        
+
         Ok(())
     }
 
     /// 连接到远程节点
-    pub async fn connect_to_node(&self, node_info: NodeInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn connect_to_node(
+        &self,
+        node_info: NodeInfo,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let node_id = node_info.id.clone();
         info!("连接到节点: {}", node_id);
 
@@ -123,7 +132,10 @@ impl NetworkManager {
                     };
 
                     // 保存连接
-                    self.connections.write().await.insert(node_id.clone(), connection);
+                    self.connections
+                        .write()
+                        .await
+                        .insert(node_id.clone(), connection);
                     info!("成功连接到节点: {}", node_id);
                 } else {
                     warn!("节点健康检查失败: {} - {}", node_id, response.status());
@@ -142,7 +154,7 @@ impl NetworkManager {
     /// 断开与节点的连接
     pub async fn disconnect_from_node(&self, node_id: &NodeId) {
         info!("断开与节点的连接: {}", node_id);
-        
+
         let mut connections = self.connections.write().await;
         if let Some(connection) = connections.get_mut(node_id) {
             connection.status = ConnectionStatus::Disconnected;
@@ -150,17 +162,17 @@ impl NetworkManager {
     }
 
     /// 发送 Raft 投票请求
-    pub async fn send_vote_request(&self, node_id: &NodeId, request: VoteRequest) -> Result<VoteResponse, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_vote_request(
+        &self,
+        node_id: &NodeId,
+        request: VoteRequest,
+    ) -> Result<VoteResponse, Box<dyn std::error::Error + Send + Sync>> {
         let connections = self.connections.read().await;
-        
+
         if let Some(connection) = connections.get(node_id) {
             let url = format!("{}/raft/vote", connection.base_url);
-            
-            let response = self.http_client
-                .post(&url)
-                .json(&request)
-                .send()
-                .await?;
+
+            let response = self.http_client.post(&url).json(&request).send().await?;
 
             if response.status().is_success() {
                 let api_response: ApiResponse<VoteResponse> = response.json().await?;
@@ -169,9 +181,9 @@ impl NetworkManager {
                         return Ok(vote_response);
                     }
                 }
-                return Err(api_response.error.unwrap_or("未知错误".to_string()).into());
+                Err(api_response.error.unwrap_or("未知错误".to_string()).into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -179,17 +191,17 @@ impl NetworkManager {
     }
 
     /// 发送 Raft 追加日志请求
-    pub async fn send_append_request(&self, node_id: &NodeId, request: AppendRequest) -> Result<AppendResponse, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_append_request(
+        &self,
+        node_id: &NodeId,
+        request: AppendRequest,
+    ) -> Result<AppendResponse, Box<dyn std::error::Error + Send + Sync>> {
         let connections = self.connections.read().await;
-        
+
         if let Some(connection) = connections.get(node_id) {
             let url = format!("{}/raft/append", connection.base_url);
-            
-            let response = self.http_client
-                .post(&url)
-                .json(&request)
-                .send()
-                .await?;
+
+            let response = self.http_client.post(&url).json(&request).send().await?;
 
             if response.status().is_success() {
                 let api_response: ApiResponse<AppendResponse> = response.json().await?;
@@ -198,9 +210,9 @@ impl NetworkManager {
                         return Ok(append_response);
                     }
                 }
-                return Err(api_response.error.unwrap_or("未知错误".to_string()).into());
+                Err(api_response.error.unwrap_or("未知错误".to_string()).into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -208,23 +220,23 @@ impl NetworkManager {
     }
 
     /// 发送心跳
-    pub async fn send_heartbeat(&self, node_id: &NodeId, heartbeat: HeartbeatMessage) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_heartbeat(
+        &self,
+        node_id: &NodeId,
+        heartbeat: HeartbeatMessage,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let connections = self.connections.read().await;
-        
+
         if let Some(connection) = connections.get(node_id) {
             let url = format!("{}/cluster/heartbeat", connection.base_url);
-            
+
             let request = HeartbeatRequest {
                 node_id: heartbeat.node_id,
                 load: heartbeat.load,
                 timestamp: heartbeat.timestamp,
             };
-            
-            let response = self.http_client
-                .post(&url)
-                .json(&request)
-                .send()
-                .await?;
+
+            let response = self.http_client.post(&url).json(&request).send().await?;
 
             if response.status().is_success() {
                 let api_response: ApiResponse<HeartbeatResponse> = response.json().await?;
@@ -234,7 +246,7 @@ impl NetworkManager {
             } else {
                 warn!("心跳HTTP错误: {}", response.status());
             }
-            
+
             Ok(())
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -242,7 +254,11 @@ impl NetworkManager {
     }
 
     /// 加入集群
-    pub async fn join_cluster(&self, seed_node: &NodeInfo, cluster_token: String) -> Result<ClusterInfo, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn join_cluster(
+        &self,
+        seed_node: &NodeInfo,
+        cluster_token: String,
+    ) -> Result<ClusterInfo, Box<dyn std::error::Error + Send + Sync>> {
         info!("尝试加入集群，种子节点: {}", seed_node.id);
 
         let base_url = format!("http://{}:{}", seed_node.address, seed_node.port);
@@ -253,11 +269,7 @@ impl NetworkManager {
             cluster_token,
         };
 
-        let response = self.http_client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
+        let response = self.http_client.post(&url).json(&request).send().await?;
 
         if response.status().is_success() {
             let api_response: ApiResponse<JoinClusterResponse> = response.json().await?;
@@ -267,23 +279,26 @@ impl NetworkManager {
                     return Ok(join_response.cluster_info);
                 }
             }
-            return Err(api_response.error.unwrap_or("加入集群失败".to_string()).into());
+            Err(api_response
+                .error
+                .unwrap_or("加入集群失败".to_string())
+                .into())
         } else {
-            return Err(format!("HTTP错误: {}", response.status()).into());
+            Err(format!("HTTP错误: {}", response.status()).into())
         }
     }
 
     /// 获取集群信息
-    pub async fn get_cluster_info(&self, node_id: &NodeId) -> Result<ClusterInfo, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_cluster_info(
+        &self,
+        node_id: &NodeId,
+    ) -> Result<ClusterInfo, Box<dyn std::error::Error + Send + Sync>> {
         let connections = self.connections.read().await;
-        
+
         if let Some(connection) = connections.get(node_id) {
             let url = format!("{}/cluster/info", connection.base_url);
-            
-            let response = self.http_client
-                .get(&url)
-                .send()
-                .await?;
+
+            let response = self.http_client.get(&url).send().await?;
 
             if response.status().is_success() {
                 let api_response: ApiResponse<ClusterInfo> = response.json().await?;
@@ -292,9 +307,12 @@ impl NetworkManager {
                         return Ok(cluster_info);
                     }
                 }
-                return Err(api_response.error.unwrap_or("获取集群信息失败".to_string()).into());
+                Err(api_response
+                    .error
+                    .unwrap_or("获取集群信息失败".to_string())
+                    .into())
             } else {
-                return Err(format!("HTTP错误: {}", response.status()).into());
+                Err(format!("HTTP错误: {}", response.status()).into())
             }
         } else {
             Err(format!("未找到节点连接: {}", node_id).into())
@@ -303,12 +321,19 @@ impl NetworkManager {
 
     /// 获取连接状态
     pub async fn get_connection_status(&self, node_id: &NodeId) -> Option<ConnectionStatus> {
-        self.connections.read().await.get(node_id).map(|conn| conn.status.clone())
+        self.connections
+            .read()
+            .await
+            .get(node_id)
+            .map(|conn| conn.status.clone())
     }
 
     /// 获取所有连接
     pub async fn get_all_connections(&self) -> HashMap<NodeId, ConnectionStatus> {
-        self.connections.read().await.iter()
+        self.connections
+            .read()
+            .await
+            .iter()
             .map(|(id, conn)| (id.clone(), conn.status.clone()))
             .collect()
     }
@@ -316,11 +341,11 @@ impl NetworkManager {
     /// 检查连接健康状态
     pub async fn check_connections_health(&self) {
         let mut connections = self.connections.write().await;
-        
+
         for (node_id, connection) in connections.iter_mut() {
             if connection.status == ConnectionStatus::Connected {
                 let health_url = format!("{}/health", connection.base_url);
-                
+
                 match self.http_client.get(&health_url).send().await {
                     Ok(response) => {
                         if response.status().is_success() {
@@ -342,10 +367,10 @@ impl NetworkManager {
     /// 启动连接监控
     pub async fn start_connection_monitoring(&self) {
         let network_manager = Arc::new(self.clone_for_monitoring());
-        
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
-            
+
             loop {
                 interval.tick().await;
                 network_manager.check_connections_health().await;
@@ -364,7 +389,7 @@ impl NetworkManager {
     /// 关闭网络服务
     pub async fn shutdown(&mut self) {
         info!("关闭网络服务");
-        
+
         // 关闭所有连接
         let mut connections = self.connections.write().await;
         for (node_id, connection) in connections.iter_mut() {
@@ -383,11 +408,11 @@ struct NetworkManagerMonitor {
 impl NetworkManagerMonitor {
     async fn check_connections_health(&self) {
         let mut connections = self.connections.write().await;
-        
+
         for (node_id, connection) in connections.iter_mut() {
             if connection.status == ConnectionStatus::Connected {
                 let health_url = format!("{}/health", connection.base_url);
-                
+
                 match self.http_client.get(&health_url).send().await {
                     Ok(response) => {
                         if response.status().is_success() {
@@ -408,6 +433,7 @@ impl NetworkManagerMonitor {
 }
 
 /// HTTP API 服务器
+#[allow(dead_code)]
 pub struct ApiServer {
     /// 本地节点信息
     local_node: NodeInfo,
@@ -432,7 +458,10 @@ impl ApiServer {
     }
 
     /// 启动API服务器
-    pub async fn start(&self, bind_address: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(
+        &self,
+        bind_address: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("启动API服务器，绑定地址: {}", bind_address);
 
         // TODO: 使用 axum 或 warp 实现 HTTP API 服务器
@@ -449,4 +478,4 @@ impl ApiServer {
 
         Ok(())
     }
-} 
+}

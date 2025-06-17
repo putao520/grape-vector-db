@@ -1,12 +1,11 @@
-use std::time::{Duration, Instant};
-use std::sync::Arc;
-use std::path::PathBuf;
-use tokio::sync::Semaphore;
-use tracing::{info, warn, error};
-use grape_vector_db::{VectorDatabase, Document, VectorDbConfig, EmbeddingConfig, errors::Result};
 use futures::future::join_all;
+use grape_vector_db::{errors::Result, Document, EmbeddingConfig, VectorDatabase, VectorDbConfig};
 use rand::{thread_rng, Rng};
-use chrono;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tracing::{error, info, warn};
 
 /// 简化性能测试配置
 #[derive(Debug, Clone)]
@@ -80,7 +79,7 @@ impl SimplePerformanceTester {
         };
 
         let database = VectorDatabase::new(PathBuf::from("./data/simple_test"), db_config).await?;
-        
+
         info!("✅ 简化向量数据库已初始化");
 
         Ok(Self {
@@ -92,15 +91,31 @@ impl SimplePerformanceTester {
     /// 生成测试数据
     async fn generate_test_data(&self) -> Result<Vec<Document>> {
         info!("📝 开始生成 {} 个测试文档", self.config.document_count);
-        
+
         let mut documents = Vec::with_capacity(self.config.document_count);
         let mut rng = thread_rng();
-        
+
         let topics = vec![
-            "人工智能", "机器学习", "深度学习", "神经网络", "自然语言处理",
-            "计算机视觉", "数据科学", "大数据", "云计算", "区块链",
-            "物联网", "边缘计算", "量子计算", "生物信息学", "网络安全",
-            "软件工程", "算法设计", "数据结构", "操作系统", "数据库系统",
+            "人工智能",
+            "机器学习",
+            "深度学习",
+            "神经网络",
+            "自然语言处理",
+            "计算机视觉",
+            "数据科学",
+            "大数据",
+            "云计算",
+            "区块链",
+            "物联网",
+            "边缘计算",
+            "量子计算",
+            "生物信息学",
+            "网络安全",
+            "软件工程",
+            "算法设计",
+            "数据结构",
+            "操作系统",
+            "数据库系统",
         ];
 
         for i in 0..self.config.document_count {
@@ -112,21 +127,51 @@ impl SimplePerformanceTester {
                     本文档详细介绍了{}的基本概念、技术原理、应用场景和发展趋势。\
                     通过深入分析{}的核心技术，我们可以更好地理解其在实际项目中的价值。\
                     {}技术的发展将推动整个行业的进步，为未来的创新奠定坚实基础。",
-                    topic, i + 1, topic, topic, topic, topic
+                    topic,
+                    i + 1,
+                    topic,
+                    topic,
+                    topic,
+                    topic
                 ),
                 title: Some(format!("{}技术详解 - 第{}篇", topic, i + 1)),
                 language: Some("zh".to_string()),
                 package_name: Some("test-package".to_string()),
                 version: Some("1.0.0".to_string()),
-                doc_type: Some(if i % 3 == 0 { "research" } else if i % 3 == 1 { "tutorial" } else { "overview" }.to_string()),
+                doc_type: Some(
+                    if i % 3 == 0 {
+                        "research"
+                    } else if i % 3 == 1 {
+                        "tutorial"
+                    } else {
+                        "overview"
+                    }
+                    .to_string(),
+                ),
                 metadata: {
                     let mut meta = std::collections::HashMap::new();
                     meta.insert("topic".to_string(), topic.to_string());
                     meta.insert("index".to_string(), i.to_string());
-                    meta.insert("difficulty".to_string(), 
-                        if rng.gen_bool(0.3) { "advanced" } else { "intermediate" }.to_string());
-                    meta.insert("category".to_string(), 
-                        if i % 3 == 0 { "research" } else if i % 3 == 1 { "tutorial" } else { "overview" }.to_string());
+                    meta.insert(
+                        "difficulty".to_string(),
+                        if rng.gen_bool(0.3) {
+                            "advanced"
+                        } else {
+                            "intermediate"
+                        }
+                        .to_string(),
+                    );
+                    meta.insert(
+                        "category".to_string(),
+                        if i % 3 == 0 {
+                            "research"
+                        } else if i % 3 == 1 {
+                            "tutorial"
+                        } else {
+                            "overview"
+                        }
+                        .to_string(),
+                    );
                     meta
                 },
                 vector: Some((0..384).map(|_| rng.gen::<f32>()).collect()),
@@ -156,8 +201,11 @@ impl SimplePerformanceTester {
 
     /// 执行并发查询测试
     async fn run_concurrent_queries(&self) -> Result<PerformanceResults> {
-        info!("🚀 开始并发查询测试，并发数: {}", self.config.concurrent_queries);
-        
+        info!(
+            "🚀 开始并发查询测试，并发数: {}",
+            self.config.concurrent_queries
+        );
+
         let semaphore = Arc::new(Semaphore::new(self.config.concurrent_queries));
         let mut query_tasks = Vec::new();
         let mut latencies = Vec::new();
@@ -165,11 +213,26 @@ impl SimplePerformanceTester {
 
         // 生成查询
         let queries = vec![
-            "人工智能技术", "机器学习算法", "深度学习模型", "神经网络架构",
-            "自然语言处理", "计算机视觉", "数据科学方法", "大数据分析",
-            "云计算平台", "区块链技术", "物联网应用", "边缘计算",
-            "量子计算原理", "生物信息学", "网络安全防护", "软件工程",
-            "算法设计", "数据结构", "操作系统", "数据库系统",
+            "人工智能技术",
+            "机器学习算法",
+            "深度学习模型",
+            "神经网络架构",
+            "自然语言处理",
+            "计算机视觉",
+            "数据科学方法",
+            "大数据分析",
+            "云计算平台",
+            "区块链技术",
+            "物联网应用",
+            "边缘计算",
+            "量子计算原理",
+            "生物信息学",
+            "网络安全防护",
+            "软件工程",
+            "算法设计",
+            "数据结构",
+            "操作系统",
+            "数据库系统",
         ];
 
         // 创建查询任务
@@ -182,7 +245,7 @@ impl SimplePerformanceTester {
             let task = tokio::spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
                 let query_start = Instant::now();
-                
+
                 let mut success = false;
                 let mut result_count = 0;
 
@@ -211,7 +274,7 @@ impl SimplePerformanceTester {
         // 统计结果
         let mut successful_queries = 0;
         let mut failed_queries = 0;
-        
+
         for result in results {
             match result {
                 Ok((success, latency_ms, _count)) => {
@@ -235,12 +298,12 @@ impl SimplePerformanceTester {
         } else {
             0.0
         };
-        
+
         let p95_index = (latencies.len() as f64 * 0.95) as usize;
         let p99_index = (latencies.len() as f64 * 0.99) as usize;
         let p95_latency = latencies.get(p95_index).copied().unwrap_or(0.0);
         let p99_latency = latencies.get(p99_index).copied().unwrap_or(0.0);
-        
+
         let total_queries = successful_queries + failed_queries;
         let success_rate = if total_queries > 0 {
             successful_queries as f64 / total_queries as f64 * 100.0
@@ -264,38 +327,38 @@ impl SimplePerformanceTester {
     /// 运行完整的性能测试
     async fn run_full_test(&self) -> Result<Vec<PerformanceResults>> {
         info!("🎯 开始完整性能测试，测试轮数: {}", self.config.test_rounds);
-        
+
         // 生成测试数据
         let documents = self.generate_test_data().await?;
-        
+
         // 加载数据
         self.load_data(documents).await?;
-        
+
         let mut all_results = Vec::new();
-        
+
         // 运行多轮测试
         for round in 1..=self.config.test_rounds {
             info!("🔄 执行第 {} 轮测试", round);
-            
+
             // 等待系统稳定
             tokio::time::sleep(Duration::from_secs(2)).await;
-            
+
             let results = self.run_concurrent_queries().await?;
             all_results.push(results);
-            
+
             info!("✅ 第 {} 轮测试完成", round);
         }
-        
+
         Ok(all_results)
     }
 
     /// 清理测试数据
     async fn cleanup(&self) -> Result<()> {
         info!("🧹 清理测试数据");
-        
+
         // 这里可以添加清理逻辑
         // self.database.clear().await?;
-        
+
         info!("✅ 测试数据清理完成");
         Ok(())
     }
@@ -305,15 +368,15 @@ impl SimplePerformanceTester {
 fn print_results(results: &[PerformanceResults], config: &SimpleTestConfig) {
     println!("\n🚀 简化向量数据库性能测试报告");
     println!("{}", "=".repeat(80));
-    
+
     println!("📊 测试配置:");
     println!("  📄 文档数量: {}", config.document_count);
     println!("  🔄 并发查询数: {}", config.concurrent_queries);
     println!("  📊 每查询结果数: {}", config.results_per_query);
     println!("  🔁 测试轮数: {}", config.test_rounds);
-    
+
     println!("\n📈 详细性能指标:");
-    
+
     for (i, result) in results.iter().enumerate() {
         println!("\n  🔄 第 {} 轮测试:", i + 1);
         println!("    ⚡ QPS: {:.2}", result.qps);
@@ -325,19 +388,20 @@ fn print_results(results: &[PerformanceResults], config: &SimpleTestConfig) {
         println!("    ❌ 失败查询: {}", result.failed_queries);
         println!("    ⏱️ 总耗时: {:.2}ms", result.total_time_ms);
     }
-    
+
     // 计算平均值
     let avg_qps = results.iter().map(|r| r.qps).sum::<f64>() / results.len() as f64;
     let avg_latency = results.iter().map(|r| r.avg_latency_ms).sum::<f64>() / results.len() as f64;
     let avg_p95 = results.iter().map(|r| r.p95_latency_ms).sum::<f64>() / results.len() as f64;
-    let avg_success_rate = results.iter().map(|r| r.success_rate).sum::<f64>() / results.len() as f64;
-    
+    let avg_success_rate =
+        results.iter().map(|r| r.success_rate).sum::<f64>() / results.len() as f64;
+
     println!("\n🎯 综合性能指标:");
     println!("  ⚡ 平均QPS: {:.2}", avg_qps);
     println!("  ⏱️ 平均延迟: {:.2}ms", avg_latency);
     println!("  📊 平均P95延迟: {:.2}ms", avg_p95);
     println!("  ✅ 平均成功率: {:.1}%", avg_success_rate);
-    
+
     // 性能等级评估
     let (performance_level, emoji) = if avg_qps >= 500.0 {
         ("优秀", "🏆")
@@ -348,22 +412,22 @@ fn print_results(results: &[PerformanceResults], config: &SimpleTestConfig) {
     } else {
         ("需要优化", "⚠️")
     };
-    
+
     println!("\n🏅 性能等级: {} {}", emoji, performance_level);
-    
+
     // 与之前版本对比
     println!("\n📊 改进对比:");
     println!("  🆚 相比HNSW版本: 稳定性提升 ~100%");
     println!("  🆚 相比原始版本: UTF-8处理 ✅");
     println!("  🆚 文本搜索: 功能完整 ✅");
-    
+
     // 技术栈特点
     println!("\n🔧 技术栈特点:");
     println!("  💾 Sled: 嵌入式键值存储，支持事务");
     println!("  🔍 文本搜索: 基于内容匹配的简单搜索");
     println!("  🚀 异步架构: Tokio + async/await");
     println!("  🔒 并发安全: Arc + RwLock 保护");
-    
+
     // 建议
     println!("\n💡 优化建议:");
     if avg_qps < 50.0 {
@@ -381,14 +445,14 @@ fn print_results(results: &[PerformanceResults], config: &SimpleTestConfig) {
         println!("  🔄 增加重试机制");
         println!("  📊 优化并发控制");
     }
-    
+
     // 下一步计划
     println!("\n🗺️ 下一步发展计划:");
     println!("  🔮 集成向量索引 (等libclang环境就绪)");
     println!("  💾 集成RocksDB存储 (高性能持久化)");
     println!("  🤖 集成嵌入模型 (真正的语义搜索)");
     println!("  📊 实现性能监控和指标收集");
-    
+
     println!("\n{}", "=".repeat(80));
 }
 
@@ -430,4 +494,4 @@ async fn main() -> Result<()> {
 
     info!("✅ 简化向量数据库性能测试完成");
     Ok(())
-} 
+}
