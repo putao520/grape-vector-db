@@ -861,7 +861,7 @@ impl RaftNode {
         // 构建状态对象
         let raft_state = PersistentRaftState {
             current_term,
-            voted_for,
+            voted_for: voted_for.clone(),
             last_log_index: self.log.read().await.len() as LogIndex,
         };
         
@@ -884,12 +884,15 @@ impl RaftNode {
             Ok(Some(state_data)) => {
                 let raft_state: PersistentRaftState = serde_json::from_slice(&state_data)?;
                 
+                // 保存状态的副本用于日志
+                let current_term = raft_state.current_term;
+                let voted_for = raft_state.voted_for.clone();
+                
                 // 恢复状态
                 *self.current_term.write().await = raft_state.current_term;
                 *self.voted_for.write().await = raft_state.voted_for;
                 
-                info!("Raft状态已恢复: 任期={}, 投票给={:?}", 
-                      raft_state.current_term, raft_state.voted_for);
+                info!("Raft状态已恢复: 任期={}, 投票给={:?}", current_term, voted_for);
             }
             Ok(None) => {
                 info!("未找到持久化的Raft状态，使用默认状态");
