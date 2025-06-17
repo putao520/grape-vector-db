@@ -414,7 +414,6 @@ impl ShardManager {
                 }
             }
             HashAlgorithm::RangeHash => {
-<<<<<<< HEAD
                 // 范围哈希：基于键的字典序范围进行分片
                 let key_bytes = key.as_bytes();
                 if key_bytes.is_empty() {
@@ -436,12 +435,6 @@ impl ShardManager {
                 let max_range = u32::MAX as u64;
                 let shard_range = max_range / self.config.shard_count as u64;
                 (range_key as u64 / shard_range) as u32
-=======
-                // 范围哈希：基于键的字符串值确定分片
-                // 简单实现：使用键的ASCII值总和模分片数
-                let sum: u64 = key.bytes().map(|b| b as u64).sum();
-                (sum % self.config.shard_count as u64) as u32
->>>>>>> main
             }
         }
     }
