@@ -5,6 +5,7 @@ use crate::{
     query::QueryEngine,
     metrics::MetricsCollector,
     index::IndexConfig,
+    concurrent::{AtomicCounters, ConcurrentHashMap},
 };
 use std::{
     path::PathBuf,
@@ -12,7 +13,7 @@ use std::{
     time::{Duration, Instant},
     collections::HashMap,
 };
-use parking_lot::RwLock;
+use parking_lot::{RwLock, Mutex};
 use tokio::runtime::Runtime;
 
 /// 数据库状态
@@ -190,8 +191,10 @@ pub struct EmbeddedVectorDB {
     state: Arc<RwLock<DatabaseState>>,
     /// 异步运行时
     runtime: Arc<Runtime>,
-    /// 活跃操作计数器
-    active_operations: Arc<parking_lot::Mutex<usize>>,
+    /// 高性能原子计数器（替代简单的活跃操作计数器）
+    counters: Arc<AtomicCounters>,
+    /// 高性能并发缓存（用于常用查询结果）
+    query_cache: Arc<ConcurrentHashMap<String, Vec<Point>>>,
 }
 
 impl EmbeddedVectorDB {
@@ -242,7 +245,8 @@ impl EmbeddedVectorDB {
             metrics,
             state: Arc::new(RwLock::new(DatabaseState::Initializing)),
             runtime,
-            active_operations: Arc::new(parking_lot::Mutex::new(0)),
+            counters: Arc::new(AtomicCounters::new()),
+            query_cache: Arc::new(ConcurrentHashMap::new()),
         };
         
         // 5. 预热（如果启用）
@@ -260,30 +264,49 @@ impl EmbeddedVectorDB {
     /// 阻塞式搜索
     pub fn search_blocking(&self, request: SearchRequest) -> Result<SearchResponse> {
         self.ensure_ready()?;
-        self.increment_operations();
+        self.counters.increment_operations();
+        self.counters.increment_search_operations();
         
         let result = self.runtime.block_on(self.search_async(request));
-        self.decrement_operations();
+        
+        match &result {
+            Ok(_) => self.counters.increment_successful_operations(),
+            Err(_) => self.counters.increment_failed_operations(),
+        }
+        
         result
     }
     
     /// 阻塞式插入向量
     pub fn upsert_blocking(&self, points: Vec<Point>) -> Result<()> {
         self.ensure_ready()?;
-        self.increment_operations();
+        self.counters.increment_operations();
         
         let result = self.runtime.block_on(self.upsert_async(points));
-        self.decrement_operations();
+        
+        match &result {
+            Ok(_) => {
+                self.counters.increment_successful_operations();
+                self.counters.increment_index_updates();
+            },
+            Err(_) => self.counters.increment_failed_operations(),
+        }
+        
         result
     }
     
     /// 阻塞式删除向量
     pub fn delete_blocking(&self, filter: Filter) -> Result<usize> {
         self.ensure_ready()?;
-        self.increment_operations();
+        self.counters.increment_operations();
         
         let result = self.runtime.block_on(self.delete_async(filter));
-        self.decrement_operations();
+        
+        match &result {
+            Ok(_) => self.counters.increment_successful_operations(),
+            Err(_) => self.counters.increment_failed_operations(),
+        }
+        
         result
     }
     
@@ -449,6 +472,7 @@ impl EmbeddedVectorDB {
         let timeout = Duration::from_millis(self.config.shutdown_timeout_ms);
         let start = Instant::now();
         
+        // 使用原子计数器来检查活跃操作
         while self.has_active_operations() {
             if start.elapsed() > timeout {
                 return Err(VectorDbError::Other("Shutdown timeout exceeded".into()));
@@ -461,20 +485,13 @@ impl EmbeddedVectorDB {
     
     /// 检查是否有活跃操作
     fn has_active_operations(&self) -> bool {
-        *self.active_operations.lock() > 0
+        // 简化检查：如果有操作但还没有完成，则认为有活跃操作
+        let total_ops = self.counters.get_operations();
+        let successful_ops = self.counters.successful_operations.load(std::sync::atomic::Ordering::Relaxed);
+        let failed_ops = self.counters.failed_operations.load(std::sync::atomic::Ordering::Relaxed);
+        
+        total_ops > (successful_ops + failed_ops)
     }
-    
-    /// 增加活跃操作计数
-    fn increment_operations(&self) {
-        *self.active_operations.lock() += 1;
-    }
-    
-    /// 减少活跃操作计数
-    fn decrement_operations(&self) {
-        let mut count = self.active_operations.lock();
-        if *count > 0 {
-            *count -= 1;
-        }
     }
     
 

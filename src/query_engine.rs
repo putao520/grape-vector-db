@@ -35,8 +35,8 @@ impl Default for QueryEngineConfig {
 /// 查询引擎
 #[derive(Clone)]
 pub struct QueryEngine {
-    storage: Arc<RwLock<dyn VectorStore>>,
-    vector_index: Arc<RwLock<dyn VectorIndex>>,
+    storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
+    vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
     config: QueryEngineConfig,
     cache: Option<moka::future::Cache<String, Vec<SearchResult>>>,
 }
@@ -44,8 +44,8 @@ pub struct QueryEngine {
 impl QueryEngine {
     /// 创建新的查询引擎
     pub fn new(
-        storage: Arc<RwLock<dyn VectorStore>>,
-        vector_index: Arc<RwLock<dyn VectorIndex>>,
+        storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
+        vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
         config: QueryEngineConfig,
     ) -> Self {
         let cache = if config.enable_cache {
@@ -110,8 +110,10 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read().await;
-        let results = storage.vector_search(query_vector, limit, threshold).await?;
+        let results = {
+            let storage = self.storage.read().await;
+            storage.vector_search(query_vector, limit, threshold).await?
+        };
 
         // 缓存结果
         if let Some(ref cache) = self.cache {
@@ -138,8 +140,10 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read().await;
-        let results = storage.text_search(query, limit, filters).await?;
+        let results = {
+            let storage = self.storage.read().await;
+            storage.text_search(query, limit, filters).await?
+        };
 
         // 缓存结果
         if let Some(ref cache) = self.cache {
@@ -168,8 +172,10 @@ impl QueryEngine {
             }
         }
 
-        let storage = self.storage.read().await;
-        let results = storage.hybrid_search(query, query_vector, limit, alpha).await?;
+        let results = {
+            let storage = self.storage.read().await;
+            storage.hybrid_search(query, query_vector, limit, alpha).await?
+        };
 
         // 缓存结果
         if let Some(ref cache) = self.cache {

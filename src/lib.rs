@@ -123,6 +123,7 @@ pub mod query_engine;
 pub mod performance;
 pub mod advanced_storage;
 pub mod distributed;
+pub mod concurrent;
 // TODO: Add missing dependencies (geo, rstar, sqlparser) to enable filtering
 // pub mod filtering;
 
@@ -149,8 +150,8 @@ use uuid;
 /// 向量数据库主结构
 #[derive(Clone)]
 pub struct VectorDatabase {
-    storage: Arc<RwLock<dyn VectorStore>>,
-    vector_index: Arc<RwLock<dyn VectorIndex>>,
+    storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
+    vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
     query_engine: QueryEngine,
     config: VectorDbConfig,
 }
@@ -168,15 +169,15 @@ impl VectorDatabase {
         let storage = BasicVectorStore::new(&updated_config.db_path)?;
         let vector_index = HnswVectorIndex::new();
         
-        let storage_arc = Arc::new(RwLock::new(storage));
-        let index_arc = Arc::new(RwLock::new(vector_index));
+        let storage: Arc<tokio::sync::RwLock<dyn VectorStore>> = Arc::new(tokio::sync::RwLock::new(storage));
+        let vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>> = Arc::new(tokio::sync::RwLock::new(vector_index));
         
         let query_config = QueryEngineConfig::default();
-        let query_engine = QueryEngine::new(storage_arc.clone(), index_arc.clone(), query_config);
+        let query_engine = QueryEngine::new(storage.clone(), vector_index.clone(), query_config);
         
         Ok(Self {
-            storage: storage_arc,
-            vector_index: index_arc,
+            storage,
+            vector_index,
             query_engine,
             config: updated_config,
         })
@@ -208,13 +209,13 @@ impl VectorDatabase {
             }
         }
 
-        // 批量插入到存储层
-        let mut storage = self.storage.write().await;
-        let doc_ids = storage.batch_insert_documents(documents).await?;
+        // 批量插入到存储层 - 使用tokio async locks
+        let doc_ids = {
+            let mut storage = self.storage.write().await;
+            storage.batch_insert_documents(documents).await?
+        };
         
         // 释放存储锁后再批量更新索引
-        drop(storage);
-        
         if !vectors_to_index.is_empty() {
             let mut vector_index = self.vector_index.write().await;
             vector_index.add_vectors(vectors_to_index)?;
