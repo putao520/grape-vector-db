@@ -266,15 +266,72 @@ impl ConsensusManager {
 
     /// 启动命令处理循环
     async fn start_command_processing(&self) {
-        let _command_handler = self.command_handler.clone();
-        let _raft_node = self.raft_node.clone();
+        let command_handler = self.command_handler.clone();
+        let raft_node = self.raft_node.clone();
 
         tokio::spawn(async move {
-            // TODO: 从 Raft 节点接收已提交的命令并执行
-            // 这里需要实现命令处理循环
+            info!("启动命令处理循环");
+            let mut last_applied = 0;
+            
             loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                // 处理已提交的日志条目
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                
+                // 检查是否有新的已提交条目需要应用
+                let commit_index = raft_node.get_commit_index().await;
+                
+                if commit_index > last_applied {
+                    // 应用从 last_applied+1 到 commit_index 的所有条目
+                    for index in (last_applied + 1)..=commit_index {
+                        if let Some(entry) = raft_node.get_log_entry(index).await {
+                            match bincode::deserialize::<crate::distributed::raft::VectorCommand>(&entry.data) {
+                                Ok(vector_command) => {
+                                    // 将 VectorCommand 转换为 ConsensusCommand
+                                    let consensus_command = match vector_command {
+                                        crate::distributed::raft::VectorCommand::Upsert { points, shard_id } => {
+                                            ConsensusCommand::VectorOperation {
+                                                operation: VectorOperation::Upsert { points },
+                                                shard_id,
+                                            }
+                                        }
+                                        crate::distributed::raft::VectorCommand::Delete { point_ids, shard_id } => {
+                                            ConsensusCommand::VectorOperation {
+                                                operation: VectorOperation::Delete { point_ids },
+                                                shard_id,
+                                            }
+                                        }
+                                        crate::distributed::raft::VectorCommand::CreateShard { shard_id, hash_range: _ } => {
+                                            // 暂时使用一个默认节点，实际应该根据集群状态决定
+                                            let primary_node = raft_node.get_node_id().clone();
+                                            ConsensusCommand::ShardOperation {
+                                                operation: ShardOperation::CreateShard {
+                                                    shard_id,
+                                                    primary_node,
+                                                    replica_nodes: vec![],
+                                                },
+                                            }
+                                        }
+                                        crate::distributed::raft::VectorCommand::DropShard { shard_id } => {
+                                            // 创建一个删除分片的迁移操作
+                                            warn!("DropShard命令暂不支持，忽略分片 {}", shard_id);
+                                            last_applied = index;
+                                            continue;
+                                        }
+                                    };
+                                    
+                                    if let Err(e) = command_handler.execute_command(consensus_command).await {
+                                        error!("执行命令失败: {}", e);
+                                    } else {
+                                        last_applied = index;
+                                        debug!("成功应用日志条目 {}", index);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("反序列化命令失败: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
     }
@@ -327,8 +384,8 @@ impl ConsensusManager {
             let vote_request = crate::distributed::raft::VoteRequest {
                 term: current_term,
                 candidate_id: node_id.clone(),
-                last_log_index: 0, // TODO: 获取实际的最后日志索引
-                last_log_term: 0,  // TODO: 获取实际的最后日志任期
+                last_log_index: raft_node.get_last_log_index().await,
+                last_log_term: raft_node.get_last_log_term().await,
             };
 
             let task = tokio::spawn(async move {

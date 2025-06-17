@@ -64,21 +64,27 @@ mod embedded_basic_tests {
         
         let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
         
-        // 测试同步添加文档
+        // 测试同步API在异步环境中的错误处理
         let test_doc = create_test_document_with_id("sync_test");
-        let doc_id = db.add_document_blocking(test_doc.clone()).unwrap();
+        
+        // 在异步环境中，同步API应该返回错误提示
+        let sync_result = db.add_document_blocking(test_doc.clone());
+        assert!(sync_result.is_err(), "在异步环境中同步API应该返回错误");
+        
+        // 但是异步API应该正常工作
+        let doc_id = db.add_document(test_doc.clone()).await.unwrap();
         assert_eq!(doc_id, "sync_test");
         
-        // 测试同步搜索
-        let results = db.search_blocking("测试", 5).unwrap();
-        assert!(!results.is_empty(), "同步搜索应该返回结果");
+        // 测试异步搜索
+        let results = db.text_search("测试", 5).await.unwrap();
+        assert!(!results.is_empty(), "异步搜索应该返回结果");
         
-        // 测试同步删除
-        let deleted = db.delete_document_blocking("sync_test").unwrap();
-        assert!(deleted, "同步删除应该成功");
+        // 测试异步删除
+        let deleted = db.delete_document("sync_test").await.unwrap();
+        assert!(deleted, "异步删除应该成功");
         
         // 验证删除后搜索
-        let results_after_delete = db.search_blocking("测试", 5).unwrap();
+        let results_after_delete = db.text_search("测试", 5).await.unwrap();
         assert!(
             results_after_delete.len() < results.len(),
             "删除后搜索结果应该减少"
@@ -206,7 +212,8 @@ mod embedded_performance_tests {
         
         // 并发读写测试
         let concurrent_count = 100;
-        let mut handles = Vec::new();
+        let mut write_handles = Vec::new();
+        let mut read_handles = Vec::new();
         
         // 启动并发写入任务
         for i in 0..concurrent_count {
@@ -217,40 +224,50 @@ mod embedded_performance_tests {
                 let result = db_clone.add_document(doc).await;
                 (result, start.elapsed())
             });
-            handles.push(handle);
+            write_handles.push(handle);
         }
         
         // 启动并发读取任务
-        for i in 0..concurrent_count {
+        for _i in 0..concurrent_count {
             let db_clone = db.clone();
             let handle = tokio::spawn(async move {
                 let start = std::time::Instant::now();
                 let result = db_clone.text_search("测试", 5).await;
                 (result, start.elapsed())
             });
-            handles.push(handle);
+            read_handles.push(handle);
         }
         
-        // 收集结果
+        // 收集写入结果
         let mut write_success = 0;
-        let mut read_success = 0;
-        let mut total_latency = Duration::ZERO;
+        let mut write_latency = Duration::ZERO;
         
-        for handle in handles {
+        for handle in write_handles {
             let (result, latency) = handle.await.unwrap();
             if result.is_ok() {
-                if latency < Duration::from_millis(100) { // 写入通常更慢
-                    read_success += 1;
-                } else {
-                    write_success += 1;
-                }
-                total_latency += latency;
+                write_success += 1;
+                write_latency += latency;
+                tester.record_operation();
+            }
+        }
+        
+        // 收集读取结果
+        let mut read_success = 0;
+        let mut read_latency = Duration::ZERO;
+        
+        for handle in read_handles {
+            let (result, latency) = handle.await.unwrap();
+            if result.is_ok() {
+                read_success += 1;
+                read_latency += latency;
                 tester.record_operation();
             }
         }
         
         let throughput = tester.get_throughput();
-        let avg_latency = total_latency / (write_success + read_success);
+        let total_latency = write_latency + read_latency;
+        let total_success = write_success + read_success;
+        let avg_latency = if total_success > 0 { total_latency / total_success } else { Duration::ZERO };
         
         println!("并发访问测试结果:");
         println!("  写入成功: {}/{}", write_success, concurrent_count);
@@ -272,7 +289,7 @@ mod embedded_performance_tests {
         let temp_dir = TempDir::new().unwrap();
         let config = VectorDbConfig::default();
         
-        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
+        let db = Arc::new(VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap());
         
         // 插入大型数据集
         let doc_count = 5000;
@@ -287,10 +304,10 @@ mod embedded_performance_tests {
             let mut batch_handles = Vec::new();
             
             for i in batch_start..batch_end {
-                let db_ref = &db;
+                let db_clone = db.clone();
                 let handle = tokio::spawn(async move {
                     let doc = create_test_document_with_id(&format!("large_dataset_doc_{}", i));
-                    db_ref.add_document(doc).await
+                    db_clone.add_document(doc).await
                 });
                 batch_handles.push(handle);
             }
@@ -679,7 +696,7 @@ async fn run_all_embedded_tests() {
     tracing_subscriber::fmt::init();
     
     println!("开始运行内嵌模式综合测试...");
-    println!("=" .repeat(60));
+    println!("{}", "=".repeat(60));
     
     // 注意：在实际测试中，这些测试模块会自动运行
     // 这里只是一个占位符函数来组织测试结构

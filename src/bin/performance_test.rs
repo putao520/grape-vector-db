@@ -4,6 +4,7 @@ use grape_vector_db::{
 };
 use std::time::Instant;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio;
 use tracing::error;
 use chrono;
@@ -22,44 +23,115 @@ async fn main() -> Result<()> {
     let data_dir = PathBuf::from("./performance_test_data");
     let db = VectorDatabase::new(data_dir, config).await?;
     
-    // 准备测试数据 - 减少数据量避免HNSW问题
+    // 准备测试数据 - 使用批量操作优化性能
     println!("📦 准备测试数据...");
     let start_prep = Instant::now();
     
     let doc_count = 1000; // 减少到1000个文档
-    for i in 0..doc_count {
-        let doc = Document {
-            id: format!("perf_doc_{}", i),
-            content: format!("这是性能测试文档 {} 的内容，包含各种关键词用于搜索测试。文档内容包括：性能、测试、数据库、向量、搜索、索引、查询、优化等关键词。", i),
-            title: Some(format!("性能测试文档 {}", i)),
-            language: Some("zh".to_string()),
-            package_name: Some("performance_test".to_string()),
-            version: Some("1.0.0".to_string()),
-            doc_type: Some("test".to_string()),
-            metadata: {
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("category".to_string(), "performance".to_string());
-                meta.insert("index".to_string(), i.to_string());
-                meta
-            },
-            vector: Some((0..384).map(|_| rand::random::<f32>()).collect()),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        };
+    let batch_size = 100; // 每批插入100个文档
+    
+    for batch_start in (0..doc_count).step_by(batch_size) {
+        let batch_end = std::cmp::min(batch_start + batch_size, doc_count);
+        let mut batch_docs = Vec::new();
         
-        db.add_document(doc).await?;
-        
-        if i % 200 == 0 {
-            println!("  已添加 {} 个文档", i + 1);
+        for i in batch_start..batch_end {
+            let doc = Document {
+                id: format!("perf_doc_{}", i),
+                content: format!("这是性能测试文档 {} 的内容，包含各种关键词用于搜索测试。文档内容包括：性能、测试、数据库、向量、搜索、索引、查询、优化等关键词。", i),
+                title: Some(format!("性能测试文档 {}", i)),
+                language: Some("zh".to_string()),
+                package_name: Some("performance_test".to_string()),
+                version: Some("1.0.0".to_string()),
+                doc_type: Some("test".to_string()),
+                metadata: {
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("category".to_string(), "performance".to_string());
+                    meta.insert("index".to_string(), i.to_string());
+                    meta
+                },
+                vector: Some((0..384).map(|_| rand::random::<f32>()).collect()),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            batch_docs.push(doc);
         }
+        
+        db.batch_add_documents(batch_docs).await?;
+        println!("  已添加 {} 个文档", batch_end);
     }
     
     let prep_time = start_prep.elapsed();
     println!("✅ 数据准备完成，耗时: {:?}", prep_time);
     println!();
     
+    // 新增：并发插入性能测试
+    run_concurrent_insertion_test(&db).await?;
+    
     // 性能测试 - 使用文本搜索而不是向量搜索
     run_performance_tests(&db).await?;
+    
+    Ok(())
+}
+
+/// 并发插入性能测试 - 专门测试问题描述中提到的并发插入50个文档的性能
+async fn run_concurrent_insertion_test(db: &VectorDatabase) -> Result<()> {
+    println!("⚡ 并发插入性能测试");
+    println!("====================");
+    
+    let insertion_sizes = vec![10, 20, 50, 100];
+    
+    for doc_count in insertion_sizes {
+        println!("📦 测试并发插入 {} 个文档", doc_count);
+        
+        // 准备测试文档
+        let mut documents = Vec::new();
+        for i in 0..doc_count {
+            let doc = Document {
+                id: format!("concurrent_test_doc_{}", i),
+                content: format!("这是并发测试文档 {} 的内容，用于测试并发插入性能。", i),
+                title: Some(format!("并发测试文档 {}", i)),
+                language: Some("zh".to_string()),
+                package_name: Some("concurrent_test".to_string()),
+                version: Some("1.0.0".to_string()),
+                doc_type: Some("test".to_string()),
+                metadata: {
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("test_type".to_string(), "concurrent".to_string());
+                    meta.insert("doc_index".to_string(), i.to_string());
+                    meta
+                },
+                vector: Some((0..384).map(|_| rand::random::<f32>()).collect()),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            documents.push(doc);
+        }
+        
+        // 测试1: 批量插入
+        let start_batch = Instant::now();
+        let _batch_ids = db.batch_add_documents(documents.clone()).await?;
+        let batch_time = start_batch.elapsed();
+        
+        println!("  📋 批量插入: {:?} ({:.2} docs/sec)", batch_time, doc_count as f64 / batch_time.as_secs_f64());
+        
+        // 清理测试数据
+        for doc in &documents {
+            let _ = db.delete_document(&doc.id).await;
+        }
+        
+        // 性能评估
+        if batch_time.as_secs_f64() < 1.0 {
+            println!("    ✅ 性能优秀 (< 1秒)");
+        } else if batch_time.as_secs_f64() < 2.0 {
+            println!("    🟡 性能良好 (< 2秒)");
+        } else if batch_time.as_secs_f64() < 5.0 {
+            println!("    🟠 性能一般 (< 5秒)");
+        } else {
+            println!("    ❌ 性能需要优化 (>= 5秒)");
+        }
+        
+        println!();
+    }
     
     Ok(())
 }
@@ -191,7 +263,12 @@ async fn run_performance_tests(db: &VectorDatabase) -> Result<()> {
 async fn run_concurrent_test() -> Result<()> {
     use tokio::task::JoinSet;
     
-    let concurrent_levels = vec![1, 5, 10, 20];
+    let concurrent_levels = vec![1, 5, 10, 20, 50]; // Add 50 concurrent test
+    
+    // 创建共享的数据库连接（避免重复创建连接的开销）
+    let config = VectorDbConfig::default();
+    let data_dir = PathBuf::from("./performance_test_data");
+    let shared_db = Arc::new(VectorDatabase::new(data_dir, config).await?);
     
     for concurrency in concurrent_levels {
         println!("🔄 并发级别: {}", concurrency);
@@ -201,15 +278,11 @@ async fn run_concurrent_test() -> Result<()> {
         
         for i in 0..concurrency {
             let query = format!("并发测试 {}", i);
+            let db_clone = shared_db.clone();
             join_set.spawn(async move {
-                // 创建一个新的数据库连接用于并发测试
-                let config = VectorDbConfig::default();
-                let data_dir = PathBuf::from("./performance_test_data");
-                let test_db = VectorDatabase::new(data_dir, config).await?;
-                
                 // 尝试多次搜索以提高成功率 - 使用文本搜索
                 for attempt in 0..3 {
-                    match test_db.text_search(&query, 10).await {
+                    match db_clone.text_search(&query, 10).await {
                         Ok(results) => return Ok(results),
                         Err(e) => {
                             if attempt == 2 {

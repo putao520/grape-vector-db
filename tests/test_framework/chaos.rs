@@ -464,7 +464,7 @@ impl ChaosExperimentBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            duration: Duration::from_minutes(1),
+            duration: Duration::from_secs(60), // 1 minute
             node_failure_rate: 0.1,
             network_failure_rate: 0.1,
             recovery_time: Duration::from_secs(30),
@@ -546,7 +546,7 @@ mod tests {
         let chaos_engine = ChaosEngine::new(network_simulator);
         
         let experiment = ChaosExperimentBuilder::new("simple_test")
-            .with_duration(Duration::from_millis(100))
+            .with_duration(Duration::from_millis(500)) // Increased from 100ms to 500ms
             .with_failure_rate(0.1, 0.1)
             .build();
         

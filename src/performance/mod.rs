@@ -2,12 +2,16 @@ pub mod cache_manager;
 pub mod search_optimizer;
 pub mod parallel_search;
 pub mod index_optimizer;
+pub mod concurrent_test;
 
 // 重新导出主要类型
 pub use cache_manager::{CacheManager, CacheConfig, CacheStats};
 pub use search_optimizer::{SearchOptimizer, SearchOptimizerConfig};
 pub use parallel_search::{ParallelSearchExecutor, ParallelSearchConfig};
 pub use index_optimizer::{IndexOptimizer, IndexOptimizerConfig, OptimizationStats};
+
+#[cfg(test)]
+pub use concurrent_test::ConcurrentPerformanceTest;
 
 /// 性能统计信息
 #[derive(Debug, Clone, Default)]
