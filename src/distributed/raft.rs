@@ -500,7 +500,7 @@ impl RaftNode {
         let timeout_duration = Duration::from_millis(self.config.heartbeat_interval_ms * 2);
         
         for peer_id in peers {
-            let request = append_request.clone();
+            let _request = append_request.clone();
             let node_id = peer_id.clone();
             
             let handle = tokio::spawn(async move {
@@ -756,7 +756,7 @@ impl RaftNode {
         let mut handles = Vec::new();
 
         for peer_id in &self.config.peers {
-            let append_request = AppendRequest {
+            let _append_request = AppendRequest {
                 term: current_term,
                 leader_id: leader_id.clone(),
                 prev_log_index: last_log_index,
@@ -854,14 +854,14 @@ impl RaftNode {
     }
 
     /// 持久化Raft状态
-    async fn persist_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn persist_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let current_term = *self.current_term.read().await;
         let voted_for = self.voted_for.read().await.clone();
         
         // 构建状态对象
         let raft_state = PersistentRaftState {
             current_term,
-            voted_for,
+            voted_for: voted_for.clone(),
             last_log_index: self.log.read().await.len() as LogIndex,
         };
         
@@ -877,7 +877,7 @@ impl RaftNode {
     }
     
     /// 从持久化存储恢复Raft状态
-    async fn restore_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn restore_state(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state_key = format!("raft_state_{}", self.config.node_id);
         
         match self.storage.get(state_key.as_bytes()) {
@@ -886,10 +886,11 @@ impl RaftNode {
                 
                 // 恢复状态
                 *self.current_term.write().await = raft_state.current_term;
+                let voted_for_clone = raft_state.voted_for.clone();
                 *self.voted_for.write().await = raft_state.voted_for;
                 
                 info!("Raft状态已恢复: 任期={}, 投票给={:?}", 
-                      raft_state.current_term, raft_state.voted_for);
+                      raft_state.current_term, voted_for_clone);
             }
             Ok(None) => {
                 info!("未找到持久化的Raft状态，使用默认状态");
@@ -951,7 +952,7 @@ impl RaftNode {
                 info!("创建分片: {}, 哈希范围: {:?}", shard_id, hash_range);
                 
                 // 在存储引擎中创建分片相关的数据结构
-                let shard_key = format!("shard_{}", shard_id);
+                let _shard_key = format!("shard_{}", shard_id);
                 let shard_info = serde_json::json!({
                     "shard_id": shard_id,
                     "hash_range": hash_range,

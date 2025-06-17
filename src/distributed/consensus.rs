@@ -266,8 +266,8 @@ impl ConsensusManager {
 
     /// 启动命令处理循环
     async fn start_command_processing(&self) {
-        let command_handler = self.command_handler.clone();
-        let raft_node = self.raft_node.clone();
+        let _command_handler = self.command_handler.clone();
+        let _raft_node = self.raft_node.clone();
 
         tokio::spawn(async move {
             // TODO: 从 Raft 节点接收已提交的命令并执行
@@ -474,7 +474,7 @@ impl ConsensusManager {
         }
 
         // 序列化命令
-        let command_data = serde_json::to_vec(&command)?;
+        let _command_data = serde_json::to_vec(&command)?;
 
         // TODO: 将命令添加到 Raft 日志
         // 这里需要实现日志复制逻辑
@@ -595,7 +595,7 @@ impl CommandHandler {
     /// 执行分片操作
     async fn execute_shard_operation(&self, operation: ShardOperation) -> Result<CommandResult, Box<dyn std::error::Error + Send + Sync>> {
         match operation {
-            ShardOperation::CreateShard { shard_id, primary_node, replica_nodes } => {
+            ShardOperation::CreateShard { shard_id, primary_node, replica_nodes: _ } => {
                 info!("创建分片: {}, 主节点: {}", shard_id, primary_node);
                 // TODO: 实现分片创建逻辑
                 Ok(CommandResult::Success {
