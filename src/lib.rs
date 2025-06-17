@@ -123,6 +123,7 @@ pub mod query_engine;
 pub mod performance;
 pub mod advanced_storage;
 pub mod distributed;
+pub mod concurrent;
 // TODO: Add missing dependencies (geo, rstar, sqlparser) to enable filtering
 // pub mod filtering;
 
@@ -143,14 +144,14 @@ pub mod errors {
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use parking_lot::RwLock;
 use uuid;
 
 /// 向量数据库主结构
 #[derive(Clone)]
 pub struct VectorDatabase {
-    storage: Arc<RwLock<dyn VectorStore>>,
-    vector_index: Arc<RwLock<dyn VectorIndex>>,
+    storage: Arc<parking_lot::RwLock<dyn VectorStore>>,
+    vector_index: Arc<parking_lot::RwLock<dyn VectorIndex>>,
     query_engine: QueryEngine,
     config: VectorDbConfig,
 }
@@ -168,15 +169,15 @@ impl VectorDatabase {
         let storage = BasicVectorStore::new(&updated_config.db_path)?;
         let vector_index = HnswVectorIndex::new();
         
-        let storage_arc = Arc::new(RwLock::new(storage));
-        let index_arc = Arc::new(RwLock::new(vector_index));
+        let storage: Arc<parking_lot::RwLock<dyn VectorStore>> = Arc::new(parking_lot::RwLock::new(storage));
+        let vector_index: Arc<parking_lot::RwLock<dyn VectorIndex>> = Arc::new(parking_lot::RwLock::new(vector_index));
         
         let query_config = QueryEngineConfig::default();
-        let query_engine = QueryEngine::new(storage_arc.clone(), index_arc.clone(), query_config);
+        let query_engine = QueryEngine::new(storage.clone(), vector_index.clone(), query_config);
         
         Ok(Self {
-            storage: storage_arc,
-            vector_index: index_arc,
+            storage,
+            vector_index,
             query_engine,
             config: updated_config,
         })
@@ -208,15 +209,15 @@ impl VectorDatabase {
             }
         }
 
-        // 批量插入到存储层
-        let mut storage = self.storage.write().await;
-        let doc_ids = storage.batch_insert_documents(documents).await?;
+        // 批量插入到存储层 - 使用parking_lot RwLock获得更好的性能
+        let doc_ids = {
+            let mut storage = self.storage.write();
+            storage.batch_insert_documents(documents).await?
+        };
         
         // 释放存储锁后再批量更新索引
-        drop(storage);
-        
         if !vectors_to_index.is_empty() {
-            let mut vector_index = self.vector_index.write().await;
+            let mut vector_index = self.vector_index.write();
             vector_index.add_vectors(vectors_to_index)?;
         }
         
@@ -225,8 +226,12 @@ impl VectorDatabase {
 
     /// 获取文档
     pub async fn get_document(&self, id: &str) -> Result<Option<Document>, VectorDbError> {
-        let storage = self.storage.read().await;
-        if let Some(record) = storage.get_document(id).await? {
+        let record = {
+            let storage = self.storage.read();
+            storage.get_document(id).await?
+        };
+        
+        if let Some(record) = record {
             Ok(Some(Document {
                 id: record.id,
                 title: Some(record.title),
@@ -248,19 +253,27 @@ impl VectorDatabase {
     /// 删除文档
     pub async fn delete_document(&self, id: &str) -> Result<bool, VectorDbError> {
         // 使用固定的锁顺序：先从索引删除，再从存储删除
+        // 使用parking_lot的性能优化锁
         {
-            let mut vector_index = self.vector_index.write().await;
+            let mut vector_index = self.vector_index.write();
             let _ = vector_index.remove_vector(id); // 忽略错误，因为可能没有向量
         }
         
-        let mut storage = self.storage.write().await;
-        storage.delete_document(id).await
+        let result = {
+            let mut storage = self.storage.write();
+            storage.delete_document(id).await
+        };
+        
+        result
     }
 
     /// 文本搜索
     pub async fn text_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, VectorDbError> {
-        let storage = self.storage.read().await;
-        storage.text_search(query, limit, None).await
+        let result = {
+            let storage = self.storage.read();
+            storage.text_search(query, limit, None).await
+        };
+        result
     }
 
     /// 语义搜索
@@ -271,12 +284,20 @@ impl VectorDatabase {
 
     /// 列出文档
     pub async fn list_documents(&self, offset: usize, limit: usize) -> Result<Vec<Document>, VectorDbError> {
-        let storage = self.storage.read().await;
-        let ids = storage.list_document_ids(offset, limit).await?;
+        let ids = {
+            let storage = self.storage.read();
+            storage.list_document_ids(offset, limit).await?
+        };
+        
         let mut documents = Vec::new();
         
         for id in ids {
-            if let Some(record) = storage.get_document(&id).await? {
+            let record = {
+                let storage = self.storage.read();
+                storage.get_document(&id).await?
+            };
+            
+            if let Some(record) = record {
                 documents.push(Document {
                     id: record.id,
                     title: Some(record.title),
@@ -298,9 +319,13 @@ impl VectorDatabase {
 
     /// 获取统计信息
     pub async fn get_stats(&self) -> DatabaseStats {
-        // 从存储中获取实际统计信息
-        let storage = self.storage.read().await;
-        if let Ok(count) = storage.count_documents().await {
+        // 从存储中获取实际统计信息 - 使用parking_lot的高性能锁
+        let count = {
+            let storage = self.storage.read();
+            storage.count_documents().await
+        };
+        
+        if let Ok(count) = count {
             DatabaseStats {
                 document_count: count,
                 ..DatabaseStats::default()
@@ -319,20 +344,32 @@ impl VectorDatabase {
     pub async fn rebuild_index(&self) -> Result<(), VectorDbError> {
         // 一次性获取两个锁，按固定顺序避免死锁
         // 总是先获取 storage 锁，然后获取 vector_index 锁
-        let storage = self.storage.read().await;
-        let mut vector_index = self.vector_index.write().await;
-        
-        // 清空索引
-        vector_index.clear();
-        
-        // 重新加载所有文档的向量
-        let ids = storage.list_document_ids(0, usize::MAX).await?;
-        
-        for id in ids {
-            if let Some(record) = storage.get_document(&id).await? {
-                if let Some(vector) = record.vector {
-                    vector_index.add_vector(id, vector)?;
+        // 使用parking_lot获得更好的性能
+        let (_ids, documents_with_vectors) = {
+            let storage = self.storage.read();
+            let ids = storage.list_document_ids(0, usize::MAX).await?;
+            
+            let mut docs_with_vectors = Vec::new();
+            for id in &ids {
+                if let Some(record) = storage.get_document(id).await? {
+                    if let Some(vector) = record.vector {
+                        docs_with_vectors.push((id.clone(), vector));
+                    }
                 }
+            }
+            (ids, docs_with_vectors)
+        };
+        
+        // Now update the index
+        {
+            let mut vector_index = self.vector_index.write();
+            
+            // 清空索引
+            vector_index.clear();
+            
+            // 重新加载所有文档的向量
+            for (id, vector) in documents_with_vectors {
+                vector_index.add_vector(id, vector)?;
             }
         }
         
@@ -350,8 +387,11 @@ impl VectorDatabase {
     ) -> Result<Vec<SearchResult>, VectorDbError> {
         // 简单实现：使用现有的混合搜索，忽略权重参数
         let _ = (text_weight, vector_weight, fusion_weight); // 避免未使用警告
-        let storage = self.storage.read().await;
-        storage.hybrid_search(query, None, limit, 0.5).await
+        let result = {
+            let storage = self.storage.read();
+            storage.hybrid_search(query, None, limit, 0.5).await
+        };
+        result
     }
 
     // 同步API接口（阻塞式调用）
