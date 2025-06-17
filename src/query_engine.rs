@@ -2,7 +2,7 @@ use crate::types::{SearchResult, VectorDbError, QueryRequest, QueryResponse};
 use crate::storage::{VectorStore};
 use crate::index::{VectorIndex};
 use std::sync::Arc;
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use std::collections::HashMap;
 
 /// 查询引擎配置
@@ -35,8 +35,8 @@ impl Default for QueryEngineConfig {
 /// 查询引擎
 #[derive(Clone)]
 pub struct QueryEngine {
-    storage: Arc<parking_lot::RwLock<dyn VectorStore>>,
-    vector_index: Arc<parking_lot::RwLock<dyn VectorIndex>>,
+    storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
+    vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
     config: QueryEngineConfig,
     cache: Option<moka::future::Cache<String, Vec<SearchResult>>>,
 }
@@ -44,8 +44,8 @@ pub struct QueryEngine {
 impl QueryEngine {
     /// 创建新的查询引擎
     pub fn new(
-        storage: Arc<parking_lot::RwLock<dyn VectorStore>>,
-        vector_index: Arc<parking_lot::RwLock<dyn VectorIndex>>,
+        storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
+        vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
         config: QueryEngineConfig,
     ) -> Self {
         let cache = if config.enable_cache {
@@ -111,7 +111,7 @@ impl QueryEngine {
         }
 
         let results = {
-            let storage = self.storage.read();
+            let storage = self.storage.read().await;
             storage.vector_search(query_vector, limit, threshold).await?
         };
 
@@ -141,7 +141,7 @@ impl QueryEngine {
         }
 
         let results = {
-            let storage = self.storage.read();
+            let storage = self.storage.read().await;
             storage.text_search(query, limit, filters).await?
         };
 
@@ -173,7 +173,7 @@ impl QueryEngine {
         }
 
         let results = {
-            let storage = self.storage.read();
+            let storage = self.storage.read().await;
             storage.hybrid_search(query, query_vector, limit, alpha).await?
         };
 
