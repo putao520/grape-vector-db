@@ -154,7 +154,7 @@ impl VectorIndex for HnswVectorIndex {
         let hnsw = self
             .hnsw
             .as_ref()
-            .ok_or_else(|| VectorDbError::IndexNotBuilt)?;
+            .ok_or(VectorDbError::IndexNotBuilt)?;
 
         let query_point = VectorPoint(query.to_vec());
         let mut search = Search::default();

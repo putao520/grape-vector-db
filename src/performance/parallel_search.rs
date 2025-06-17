@@ -67,8 +67,8 @@ impl ParallelSearchExecutor {
     pub async fn parallel_text_search(
         &self,
         queries: Vec<String>,
-        storage: &dyn VectorStore,
-        limit: usize,
+        _storage: &dyn VectorStore,
+        _limit: usize,
     ) -> Result<Vec<Vec<SearchResult>>, VectorDbError> {
         // 检查缓存
         let mut cached_results = Vec::new();
@@ -88,7 +88,7 @@ impl ParallelSearchExecutor {
         // 并行执行未缓存的查询
         let uncached_results: Result<Vec<_>, _> = uncached_queries
             .into_par_iter()
-            .map(|query| {
+            .map(|_query| {
                 self.counters.increment_search_operations();
                 // 注意：这里使用同步版本，因为 rayon 不支持异步
                 // 在实际实现中，你可能需要使用 block_on 或其他方式处理异步调用

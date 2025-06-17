@@ -34,6 +34,7 @@ impl Default for QueryEngineConfig {
 
 /// 查询引擎
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct QueryEngine {
     storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
     vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
@@ -218,11 +219,7 @@ impl QueryEngine {
 
     /// 获取缓存统计信息
     pub async fn get_cache_stats(&self) -> Option<(u64, u64)> {
-        if let Some(ref cache) = self.cache {
-            Some((cache.entry_count(), cache.weighted_size()))
-        } else {
-            None
-        }
+        self.cache.as_ref().map(|cache| (cache.entry_count(), cache.weighted_size()))
     }
 
     /// 更新配置

@@ -143,12 +143,12 @@ pub mod errors {
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::RwLock;
-use uuid;
+
+
 
 /// 向量数据库主结构
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct VectorDatabase {
     storage: Arc<tokio::sync::RwLock<dyn VectorStore>>,
     vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
@@ -160,8 +160,6 @@ impl VectorDatabase {
     /// 创建新的向量数据库实例
     pub async fn new(db_path: PathBuf, config: VectorDbConfig) -> Result<Self, VectorDbError> {
         use crate::index::HnswVectorIndex;
-        use std::sync::Arc;
-        use tokio::sync::RwLock;
 
         let mut updated_config = config;
         updated_config.db_path = db_path.to_string_lossy().to_string();
@@ -636,7 +634,7 @@ mod tests {
         }
 
         // All operations should complete without deadlocks
-        let timeout_duration = Duration::from_secs(10);
+        let timeout_duration = std::time::Duration::from_secs(10);
         for handle in handles {
             let result = tokio::time::timeout(timeout_duration, handle).await;
             assert!(

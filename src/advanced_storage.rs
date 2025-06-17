@@ -2,11 +2,11 @@
 // Week 9-10: Storage Engine Upgrade
 
 use crate::errors::{Result, VectorDbError};
-use crate::types::{Point, SearchResult};
+use crate::types::Point;
 use serde::{Deserialize, Serialize};
 use sled::{
-    transaction::{TransactionError, TransactionResult, Transactional},
-    Db, IVec, Tree,
+    transaction::{TransactionResult, Transactional},
+    Db, Tree,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -174,7 +174,7 @@ impl AdvancedStorage {
 
         // Use transaction for atomic writes
         let result: TransactionResult<(), ()> =
-            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+            (vectors_tree, metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
                 vectors_tx.insert(point.id.as_bytes(), vector_data.clone())?;
                 metadata_tx.insert(point.id.as_bytes(), metadata_data.clone())?;
                 Ok(())
@@ -243,7 +243,7 @@ impl AdvancedStorage {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
 
         let result: TransactionResult<bool, ()> =
-            (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
+            (vectors_tree, metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
                 let vector_existed = vectors_tx.remove(id.as_bytes())?.is_some();
                 let metadata_existed = metadata_tx.remove(id.as_bytes())?.is_some();
                 Ok(vector_existed || metadata_existed)
@@ -556,6 +556,7 @@ struct VectorMetadata {
 }
 
 /// Helper function to copy directory recursively
+#[allow(dead_code)]
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
     std::fs::create_dir_all(&dst)?;
     for entry in std::fs::read_dir(src)? {

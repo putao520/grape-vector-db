@@ -1,4 +1,5 @@
 pub mod cache_manager;
+#[cfg(test)]
 pub mod concurrent_test;
 pub mod index_optimizer;
 pub mod parallel_search;

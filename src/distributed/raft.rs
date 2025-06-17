@@ -579,7 +579,7 @@ impl RaftNode {
         }
 
         // 检查是否达到多数
-        let required_count = (self.config.peers.len() + 1) / 2 + 1;
+        let required_count = self.config.peers.len().div_ceil(2) + 1;
 
         if success_count >= required_count {
             // 更新提交索引
@@ -938,8 +938,8 @@ impl RaftNode {
                 let raft_state: PersistentRaftState = serde_json::from_slice(&state_data)?;
 
                 // 保存状态的副本用于日志
-                let current_term = raft_state.current_term;
-                let voted_for = raft_state.voted_for.clone();
+                let _current_term = raft_state.current_term;
+                let _voted_for = raft_state.voted_for.clone();
 
                 // 恢复状态
                 *self.current_term.write().await = raft_state.current_term;
@@ -1152,7 +1152,7 @@ impl RaftNode {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut log = self.log.write().await;
 
-        if last_included_index <= 0 || last_included_index > log.len() as LogIndex {
+        if last_included_index == 0 || last_included_index > log.len() as LogIndex {
             return Err(format!("无效的压缩索引: {}", last_included_index).into());
         }
 

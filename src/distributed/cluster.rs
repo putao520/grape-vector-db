@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
+use tracing::{error, info, warn};
+
 
 use crate::advanced_storage::AdvancedStorage;
 use crate::distributed::raft::{RaftConfig, RaftNode};
@@ -219,6 +219,7 @@ impl ClusterManager {
     }
 
     /// 发送心跳
+    #[allow(dead_code)]
     async fn send_heartbeat(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 收集本地节点负载信息
         let load = self.collect_node_load().await?;
@@ -238,6 +239,7 @@ impl ClusterManager {
     }
 
     /// 收集节点负载信息
+    #[allow(dead_code)]
     async fn collect_node_load(
         &self,
     ) -> Result<NodeLoad, Box<dyn std::error::Error + Send + Sync>> {
@@ -279,6 +281,7 @@ impl ClusterManager {
     }
 
     /// 监控集群健康状态
+    #[allow(dead_code)]
     async fn monitor_cluster_health(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut cluster_info = self.cluster_info.write().await;
         let now = chrono::Utc::now().timestamp();
@@ -308,6 +311,7 @@ impl ClusterManager {
     }
 
     /// 处理节点失败
+    #[allow(dead_code)]
     async fn handle_node_failure(
         &self,
         node_id: &NodeId,

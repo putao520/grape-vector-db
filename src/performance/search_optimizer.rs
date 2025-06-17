@@ -39,10 +39,13 @@ impl Default for SearchOptimizerConfig {
     }
 }
 
+/// 类型别名：搜索结果缓存
+type SearchCache = Arc<RwLock<HashMap<String, (Vec<SearchResult>, Instant)>>>;
+
 /// 搜索优化器
 pub struct SearchOptimizer {
     config: SearchOptimizerConfig,
-    cache: Arc<RwLock<HashMap<String, (Vec<SearchResult>, Instant)>>>,
+    cache: SearchCache,
 }
 
 impl SearchOptimizer {

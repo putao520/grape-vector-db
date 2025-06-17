@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::advanced_storage::AdvancedStorage;
 use crate::distributed::network::NetworkManager;
 use crate::distributed::raft::{RaftNode, RaftState};
-use crate::types::{ClusterInfo, LogIndex, NodeId, NodeInfo, Term};
+use crate::types::{ClusterInfo, NodeId, NodeInfo, Term};
 
 /// 共识管理器
 pub struct ConsensusManager {
@@ -58,6 +58,7 @@ impl Default for ConsensusState {
 }
 
 /// 命令处理器
+#[allow(dead_code)]
 pub struct CommandHandler {
     /// 存储引擎
     storage: Arc<AdvancedStorage>,

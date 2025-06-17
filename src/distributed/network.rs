@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::distributed::raft::{
@@ -11,6 +11,7 @@ use crate::distributed::raft::{
 use crate::types::{ClusterInfo, HeartbeatMessage, NodeId, NodeInfo};
 
 /// 网络管理器
+#[allow(dead_code)]
 pub struct NetworkManager {
     /// 本地节点信息
     local_node: NodeInfo,
@@ -432,6 +433,7 @@ impl NetworkManagerMonitor {
 }
 
 /// HTTP API 服务器
+#[allow(dead_code)]
 pub struct ApiServer {
     /// 本地节点信息
     local_node: NodeInfo,

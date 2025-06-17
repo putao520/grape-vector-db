@@ -5,10 +5,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::advanced_storage::AdvancedStorage;
-use crate::types::*;
+
 use crate::types::{NodeId, Point, ShardInfo, ShardState};
 
 /// 分片管理器
@@ -509,10 +509,7 @@ impl ShardManager {
 
                 // 计算范围大小
                 let range_size = u64::MAX / self.config.shard_count as u64;
-                let shard_id =
-                    (hash_value / range_size).min(self.config.shard_count as u64 - 1) as u32;
-
-                shard_id
+                (hash_value / range_size).min(self.config.shard_count as u64 - 1) as u32
             }
         }
     }
@@ -528,7 +525,7 @@ impl ShardManager {
             .read()
             .await
             .get(&shard_id)
-            .map(|shard| shard.clone())
+            .map(|shard| shard.clone_shard())
     }
 
     /// 向分片插入向量
@@ -1331,10 +1328,7 @@ impl ShardRouter {
 
                 // 计算范围大小
                 let range_size = u64::MAX / self.config.shard_count as u64;
-                let shard_id =
-                    (hash_value / range_size).min(self.config.shard_count as u64 - 1) as u32;
-
-                shard_id
+                (hash_value / range_size).min(self.config.shard_count as u64 - 1) as u32
             }
         }
     }
@@ -1415,7 +1409,7 @@ pub struct ClusterLoadStats {
 
 impl LocalShard {
     /// 克隆本地分片（用于异步操作）
-    pub fn clone(&self) -> Self {
+    pub fn clone_shard(&self) -> Self {
         Self {
             shard_id: self.shard_id,
             info: self.info.clone(),

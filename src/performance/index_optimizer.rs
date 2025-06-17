@@ -141,6 +141,7 @@ pub struct OptimizationResult {
 
 /// 内部优化结果
 #[derive(Debug)]
+#[allow(dead_code)]
 struct InternalOptimizationResult {
     operations_performed: Vec<String>,
     performance_improvement: f32,

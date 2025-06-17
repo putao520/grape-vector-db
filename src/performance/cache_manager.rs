@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// 智能缓存管理器
+#[allow(dead_code)]
 pub struct CacheManager {
     /// 查询结果缓存
     query_cache: Arc<Cache<String, Vec<u8>>>,

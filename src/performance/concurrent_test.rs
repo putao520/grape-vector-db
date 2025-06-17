@@ -247,7 +247,7 @@ impl ConcurrentPerformanceTest {
         let db_search = self.db.clone();
         let counters_search = self.counters.clone();
         let search_handle = tokio::spawn(async move {
-            let queries = vec!["混合", "负载", "测试", "文档", "性能"];
+            let queries = ["混合", "负载", "测试", "文档", "性能"];
             let mut query_counter = 0;
 
             while Instant::now() < end_time {
