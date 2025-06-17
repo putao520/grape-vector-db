@@ -546,7 +546,7 @@ mod tests {
         let chaos_engine = ChaosEngine::new(network_simulator);
         
         let experiment = ChaosExperimentBuilder::new("simple_test")
-            .with_duration(Duration::from_millis(100))
+            .with_duration(Duration::from_millis(500)) // Increased from 100ms to 500ms
             .with_failure_rate(0.1, 0.1)
             .build();
         
