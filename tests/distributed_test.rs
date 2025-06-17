@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
+use tempfile::TempDir;
 
 use grape_vector_db::advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
 use grape_vector_db::distributed::raft::{RaftConfig, RaftNode};
@@ -17,10 +18,14 @@ async fn test_raft_node_creation() {
         peers: vec!["node2".to_string(), "node3".to_string()],
         election_timeout_ms: 150,
         heartbeat_interval_ms: 50,
+        log_compaction_threshold: 1000,
+        snapshot_interval: 100,
     };
 
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let raft_node = RaftNode::new(config, storage);
     
@@ -70,8 +75,10 @@ async fn test_consistent_hash_ring() {
 async fn test_shard_manager_initialization() {
     // 测试分片管理器初始化
     let config = ShardConfig::default();
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let shard_manager = ShardManager::new(config, storage, "node1".to_string());
     
@@ -95,8 +102,10 @@ async fn test_shard_manager_initialization() {
 async fn test_shard_health_monitoring() {
     // 测试分片健康监控
     let config = ShardConfig::default();
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let shard_manager = ShardManager::new(config, storage, "node1".to_string());
     
@@ -129,10 +138,14 @@ async fn test_raft_state_persistence() {
         peers: vec!["peer1".to_string()],
         election_timeout_ms: 150,
         heartbeat_interval_ms: 50,
+        log_compaction_threshold: 1000,
+        snapshot_interval: 100,
     };
 
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let raft_node = RaftNode::new(config.clone(), storage.clone());
     
@@ -156,8 +169,10 @@ async fn test_shard_rebalancing() {
         ..Default::default()
     };
     
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let shard_manager = ShardManager::new(config, storage, "node1".to_string());
     
@@ -188,10 +203,14 @@ async fn test_log_compaction() {
         peers: vec![],
         election_timeout_ms: 150,
         heartbeat_interval_ms: 50,
+        log_compaction_threshold: 1000,
+        snapshot_interval: 100,
     };
 
-    let storage_config = AdvancedStorageConfig::default();
-    let storage = Arc::new(AdvancedStorage::new(&storage_config).expect("创建存储失败"));
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let mut storage_config = AdvancedStorageConfig::default();
+    storage_config.db_path = temp_dir.path().to_path_buf();
+    let storage = Arc::new(AdvancedStorage::new(storage_config).expect("创建存储失败"));
     
     let raft_node = RaftNode::new(config, storage);
     

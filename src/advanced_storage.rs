@@ -34,7 +34,7 @@ impl Default for AdvancedStorageConfig {
         Self {
             db_path: PathBuf::from("./grape_vector_db"),
             backup_path: None,
-            enable_compression: true,
+            enable_compression: false, // Disable compression to avoid Sled feature issues
             cache_size: 512 * 1024 * 1024, // 512MB
             flush_interval_ms: 1000,
             enable_checksums: true,
@@ -78,15 +78,17 @@ impl AdvancedStorage {
     /// Create a new advanced storage instance
     pub fn new(config: AdvancedStorageConfig) -> Result<Self> {
         // Configure Sled database
-        let mut sled_config = sled::Config::default()
+        let sled_config = sled::Config::default()
             .path(&config.db_path)
             .cache_capacity(config.cache_size as u64)
-            .flush_every_ms(Some(config.flush_interval_ms))
-            .use_compression(config.enable_compression);
+            .flush_every_ms(Some(config.flush_interval_ms));
+            // Disable compression for now to avoid Sled feature issues
+            // .use_compression(config.enable_compression);
 
-        if config.enable_checksums {
-            sled_config = sled_config.use_compression(true);
-        }
+        // Removing checksum-based compression for now
+        // if config.enable_checksums {
+        //     sled_config = sled_config.use_compression(true);
+        // }
 
         let db = sled_config.open()
             .map_err(|e| VectorDbError::StorageError(format!("Failed to open database: {}", e)))?;
@@ -138,11 +140,11 @@ impl AdvancedStorage {
 
         // Serialize vector data
         let vector_data = bincode::serialize(&point.vector)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize vector: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize vector: {}", e)))?;
 
         // Serialize metadata
         let payload_json = serde_json::to_string(&point.payload)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize payload: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize payload: {}", e)))?;
         
         let metadata = VectorMetadata {
             id: point.id.clone(),
@@ -153,7 +155,7 @@ impl AdvancedStorage {
         };
 
         let metadata_data = bincode::serialize(&metadata)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize metadata: {}", e)))?;
 
         // Use transaction for atomic writes
         let result: TransactionResult<(), ()> = (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
@@ -185,13 +187,13 @@ impl AdvancedStorage {
         match (vector_data, metadata_data) {
             (Some(vector_bytes), Some(metadata_bytes)) => {
                 let vector: Vec<f32> = bincode::deserialize(&vector_bytes)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize vector: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize vector: {}", e)))?;
 
                 let metadata: VectorMetadata = bincode::deserialize(&metadata_bytes)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize metadata: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize metadata: {}", e)))?;
 
                 let payload: HashMap<String, serde_json::Value> = serde_json::from_str(&metadata.payload_json)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize payload JSON: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize payload JSON: {}", e)))?;
 
                 Ok(Some(Point {
                     id: metadata.id,
@@ -438,6 +440,14 @@ impl AdvancedStorage {
         metadata_tree.insert(key, value)
             .map_err(|e| VectorDbError::StorageError(format!("Failed to put data: {}", e)))?;
         Ok(())
+    }
+
+    /// Get raw data (generic method for distributed systems)
+    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
+        let result = metadata_tree.get(key)
+            .map_err(|e| VectorDbError::StorageError(format!("Failed to get data: {}", e)))?;
+        Ok(result.map(|ivec| ivec.to_vec()))
     }
 
     /// Delete raw data (generic method for distributed systems)

@@ -413,6 +413,12 @@ impl ShardManager {
                     (hasher.finish() % self.config.shard_count as u64) as u32
                 }
             }
+            HashAlgorithm::RangeHash => {
+                // 范围哈希：基于键的字符串值确定分片
+                // 简单实现：使用键的ASCII值总和模分片数
+                let sum: u64 = key.bytes().map(|b| b as u64).sum();
+                (sum % self.config.shard_count as u64) as u32
+            }
         }
     }
 
@@ -603,7 +609,7 @@ impl ShardManager {
         
         // 获取分片信息
         let local_shards = self.local_shards.read().await;
-        if let Some(local_shard) = local_shards.get(&shard_id) {
+        if let Some(_local_shard) = local_shards.get(&shard_id) {
             // 在实际实现中，这里应该调用存储引擎的搜索方法
             // 暂时返回模拟结果
             
@@ -719,7 +725,7 @@ impl ShardManager {
         // 1. 标记分片为迁移状态
         {
             let mut local_shards = self.local_shards.write().await;
-            if let Some(local_shard) = local_shards.get_mut(&shard_id) {
+            if let Some(_local_shard) = local_shards.get_mut(&shard_id) {
                 info!("标记分片 {} 为迁移状态", shard_id);
                 // 这里可以添加迁移状态标记，例如在统计信息中添加标记
             } else {
