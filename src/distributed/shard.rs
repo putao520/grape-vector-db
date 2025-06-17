@@ -413,6 +413,29 @@ impl ShardManager {
                     (hasher.finish() % self.config.shard_count as u64) as u32
                 }
             }
+            HashAlgorithm::RangeHash => {
+                // 范围哈希：基于键的字典序范围进行分片
+                let key_bytes = key.as_bytes();
+                if key_bytes.is_empty() {
+                    return 0;
+                }
+                
+                // 使用前几个字节计算范围
+                let range_key = if key_bytes.len() >= 4 {
+                    u32::from_be_bytes([key_bytes[0], key_bytes[1], key_bytes[2], key_bytes[3]])
+                } else {
+                    let mut bytes = [0u8; 4];
+                    for (i, &b) in key_bytes.iter().enumerate() {
+                        bytes[i] = b;
+                    }
+                    u32::from_be_bytes(bytes)
+                };
+                
+                // 将范围映射到分片
+                let max_range = u32::MAX as u64;
+                let shard_range = max_range / self.config.shard_count as u64;
+                (range_key as u64 / shard_range) as u32
+            }
         }
     }
 

@@ -138,11 +138,11 @@ impl AdvancedStorage {
 
         // Serialize vector data
         let vector_data = bincode::serialize(&point.vector)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize vector: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize vector: {}", e)))?;
 
         // Serialize metadata
         let payload_json = serde_json::to_string(&point.payload)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize payload: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize payload: {}", e)))?;
         
         let metadata = VectorMetadata {
             id: point.id.clone(),
@@ -153,7 +153,7 @@ impl AdvancedStorage {
         };
 
         let metadata_data = bincode::serialize(&metadata)
-            .map_err(|e| VectorDbError::Other(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| VectorDbError::SerializationError(format!("Failed to serialize metadata: {}", e)))?;
 
         // Use transaction for atomic writes
         let result: TransactionResult<(), ()> = (&*vectors_tree, &*metadata_tree).transaction(|(vectors_tx, metadata_tx)| {
@@ -185,13 +185,13 @@ impl AdvancedStorage {
         match (vector_data, metadata_data) {
             (Some(vector_bytes), Some(metadata_bytes)) => {
                 let vector: Vec<f32> = bincode::deserialize(&vector_bytes)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize vector: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize vector: {}", e)))?;
 
                 let metadata: VectorMetadata = bincode::deserialize(&metadata_bytes)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize metadata: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize metadata: {}", e)))?;
 
                 let payload: HashMap<String, serde_json::Value> = serde_json::from_str(&metadata.payload_json)
-                    .map_err(|e| VectorDbError::Other(format!("Failed to deserialize payload JSON: {}", e)))?;
+                    .map_err(|e| VectorDbError::SerializationError(format!("Failed to deserialize payload JSON: {}", e)))?;
 
                 Ok(Some(Point {
                     id: metadata.id,
