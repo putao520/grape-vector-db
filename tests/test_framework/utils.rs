@@ -137,12 +137,12 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 /// 等待指定条件成立，带超时
 pub async fn wait_for_condition<F, Fut>(
-    condition: F,
+    mut condition: F,
     timeout: std::time::Duration,
     check_interval: std::time::Duration,
 ) -> bool
 where
-    F: Fn() -> Fut,
+    F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
     let start = std::time::Instant::now();
@@ -497,18 +497,22 @@ mod tests {
     
     #[tokio::test]
     async fn test_wait_for_condition() {
-        let mut counter = 0;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        
+        let counter = Arc::new(AtomicU32::new(0));
+        let counter_clone = counter.clone();
         
         let result = wait_for_condition(
-            || {
-                counter += 1;
-                async move { counter >= 5 }
+            move || {
+                let count = counter_clone.fetch_add(1, Ordering::SeqCst);
+                async move { count >= 4 }
             },
             std::time::Duration::from_secs(1),
             std::time::Duration::from_millis(10),
         ).await;
         
         assert!(result);
-        assert!(counter >= 5);
+        assert!(counter.load(Ordering::SeqCst) >= 5);
     }
 }

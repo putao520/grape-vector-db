@@ -28,7 +28,7 @@ pub struct Partition {
 }
 
 /// 网络混沌配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkChaos {
     /// 丢包率 (0.0-1.0)
     pub packet_loss: f64,
@@ -243,7 +243,7 @@ impl NetworkSimulator {
                         let node1 = format!("node_{}", fastrand::u32(0..6));
                         let node2 = format!("node_{}", fastrand::u32(0..6));
                         let spike_latency = Duration::from_millis(chaos.latency_spike);
-                        self.set_latency(node1, node2, spike_latency).await;
+                        self.set_latency(node1.clone(), node2.clone(), spike_latency).await;
                         
                         // 延迟一段时间后恢复
                         let simulator = self.clone();

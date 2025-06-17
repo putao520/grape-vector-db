@@ -797,6 +797,9 @@ pub enum VectorDbError {
     #[error("索引构建错误: {0}")]
     IndexBuildError(String),
     
+    #[error("运行时错误: {0}")]
+    RuntimeError(String),
+    
     #[error("功能未实现: {0}")]
     NotImplemented(String),
 }
