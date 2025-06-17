@@ -142,6 +142,7 @@ pub mod errors {
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// 向量数据库主结构
@@ -181,8 +182,50 @@ impl VectorDatabase {
 
     /// 添加文档
     pub async fn add_document(&self, document: Document) -> Result<String, VectorDbError> {
+        // 使用固定的锁顺序：先 storage，后 vector_index（如果需要）
         let mut storage = self.storage.write().await;
-        storage.insert_document(document).await
+        let doc_id = storage.insert_document(document).await?;
+        
+        // 如果文档有向量，添加到索引中
+        if let Some(record) = storage.get_document(&doc_id).await? {
+            if let Some(ref vector) = record.vector {
+                // 释放 storage 锁后再获取 vector_index 锁
+                drop(storage);
+                let mut vector_index = self.vector_index.write().await;
+                vector_index.add_vector(doc_id.clone(), vector.clone())?;
+            }
+        }
+        
+        Ok(doc_id)
+    }
+
+    /// 批量添加文档（更高效的并发操作）
+    pub async fn batch_add_documents(&self, documents: Vec<Document>) -> Result<Vec<String>, VectorDbError> {
+        // 使用一致的锁顺序来避免死锁
+        let mut storage = self.storage.write().await;
+        let doc_ids = storage.batch_insert_documents(documents).await?;
+        
+        // 收集所有需要索引的向量
+        let mut vectors_to_index = Vec::new();
+        for doc_id in &doc_ids {
+            if let Some(record) = storage.get_document(doc_id).await? {
+                if let Some(vector) = record.vector {
+                    vectors_to_index.push((doc_id.clone(), vector));
+                }
+            }
+        }
+        
+        // 释放存储锁后再批量更新索引
+        drop(storage);
+        
+        if !vectors_to_index.is_empty() {
+            let mut vector_index = self.vector_index.write().await;
+            for (doc_id, vector) in vectors_to_index {
+                vector_index.add_vector(doc_id, vector)?;
+            }
+        }
+        
+        Ok(doc_ids)
     }
 
     /// 获取文档
@@ -209,6 +252,12 @@ impl VectorDatabase {
 
     /// 删除文档
     pub async fn delete_document(&self, id: &str) -> Result<bool, VectorDbError> {
+        // 使用固定的锁顺序：先从索引删除，再从存储删除
+        {
+            let mut vector_index = self.vector_index.write().await;
+            let _ = vector_index.remove_vector(id); // 忽略错误，因为可能没有向量
+        }
+        
         let mut storage = self.storage.write().await;
         storage.delete_document(id).await
     }
@@ -273,20 +322,20 @@ impl VectorDatabase {
 
     /// 重建索引
     pub async fn rebuild_index(&self) -> Result<(), VectorDbError> {
-        // 简单实现：清空索引并重新添加所有向量
-        {
-            let mut vector_index = self.vector_index.write().await;
-            vector_index.clear();
-        }
-        
-        // 从存储中重新加载所有文档的向量
+        // 一次性获取两个锁，按固定顺序避免死锁
+        // 总是先获取 storage 锁，然后获取 vector_index 锁
         let storage = self.storage.read().await;
+        let mut vector_index = self.vector_index.write().await;
+        
+        // 清空索引
+        vector_index.clear();
+        
+        // 重新加载所有文档的向量
         let ids = storage.list_document_ids(0, usize::MAX).await?;
         
         for id in ids {
             if let Some(record) = storage.get_document(&id).await? {
                 if let Some(vector) = record.vector {
-                    let mut vector_index = self.vector_index.write().await;
                     vector_index.add_vector(id, vector)?;
                 }
             }
@@ -499,5 +548,114 @@ mod tests {
         // 混合搜索
         let results = db.hybrid_search_enhanced("编程", 5, 0.7, 0.3, 0.3).await.unwrap();
         assert!(!results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_operations_no_deadlock() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = VectorDbConfig::default();
+        
+        let db = Arc::new(VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap());
+        
+        // Test concurrent operations that could cause deadlocks
+        let mut handles = Vec::new();
+        
+        for i in 0..20 {
+            let db_clone = db.clone();
+            let handle = tokio::spawn(async move {
+                let doc_id = format!("concurrent_doc_{}", i);
+                let doc = Document {
+                    id: doc_id.clone(),
+                    title: Some(format!("Concurrent Document {}", i)),
+                    content: format!("This is concurrent content for document {}", i),
+                    language: Some("en".to_string()),
+                    version: Some("1".to_string()),
+                    doc_type: Some("concurrent".to_string()),
+                    package_name: Some("concurrent_package".to_string()),
+                    vector: Some(vec![0.1 * i as f32; 128]), // Add a vector for indexing
+                    metadata: std::collections::HashMap::new(),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                };
+                
+                // Mix different operations to test lock ordering
+                if i % 3 == 0 {
+                    // Add then get
+                    let result_id = db_clone.add_document(doc).await.unwrap();
+                    assert_eq!(result_id, doc_id);
+                    let retrieved = db_clone.get_document(&doc_id).await.unwrap();
+                    assert!(retrieved.is_some());
+                } else if i % 3 == 1 {
+                    // Add then search
+                    let result_id = db_clone.add_document(doc).await.unwrap();
+                    assert_eq!(result_id, doc_id);
+                    let results = db_clone.text_search("concurrent", 5).await.unwrap();
+                    assert!(!results.is_empty());
+                } else {
+                    // Batch operation
+                    let result_ids = db_clone.batch_add_documents(vec![doc]).await.unwrap();
+                    assert_eq!(result_ids.len(), 1);
+                    assert_eq!(result_ids[0], doc_id);
+                }
+                
+                i
+            });
+            handles.push(handle);
+        }
+        
+        // All operations should complete without deadlocks
+        let timeout_duration = Duration::from_secs(10);
+        for handle in handles {
+            let result = tokio::time::timeout(timeout_duration, handle).await;
+            assert!(result.is_ok(), "Operation should not timeout (indicates possible deadlock)");
+            assert!(result.unwrap().is_ok(), "Task should complete successfully");
+        }
+        
+        // Verify final state
+        let stats = db.get_stats().await;
+        assert_eq!(stats.document_count, 20);
+    }
+
+    #[tokio::test]
+    async fn test_batch_operations_performance() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = VectorDbConfig::default();
+        
+        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
+        
+        // Create a larger batch to test performance
+        let mut documents = Vec::new();
+        for i in 0..50 { // Reduced from 100 to 50 for faster testing
+            let doc = Document {
+                id: format!("batch_perf_doc_{}", i),
+                title: Some(format!("Batch Performance Document {}", i)),
+                content: format!("This is batch performance content for document {}", i),
+                language: Some("en".to_string()),
+                version: Some("1".to_string()),
+                doc_type: Some("batch_perf".to_string()),
+                package_name: Some("batch_perf_package".to_string()),
+                vector: Some(vec![0.01 * i as f32; 128]), // Reduced vector size for faster testing
+                metadata: std::collections::HashMap::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            documents.push(doc);
+        }
+        
+        let start_time = std::time::Instant::now();
+        let result_ids = db.batch_add_documents(documents).await.unwrap();
+        let elapsed = start_time.elapsed();
+        
+        assert_eq!(result_ids.len(), 50);
+        println!("Batch insert of 50 documents took: {:?}", elapsed);
+        
+        // Test rebuild index (this should not deadlock)
+        let rebuild_start = std::time::Instant::now();
+        db.rebuild_index().await.unwrap();
+        let rebuild_elapsed = rebuild_start.elapsed();
+        println!("Index rebuild took: {:?}", rebuild_elapsed);
+        
+        let final_stats = db.get_stats().await;
+        assert_eq!(final_stats.document_count, 50);
     }
 }
