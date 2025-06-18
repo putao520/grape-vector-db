@@ -509,7 +509,7 @@ impl FailureDetector {
     async fn start_monitoring(&self, node_id: &NodeId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let node_id_clone = node_id.clone();
         let heartbeat_history = self.heartbeat_history.clone();
-        let config = self.config.clone();
+        let _config = self.config.clone(); // 保留配置引用以备将来使用
         
         let task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));

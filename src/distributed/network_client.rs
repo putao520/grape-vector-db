@@ -159,7 +159,7 @@ impl DistributedNetworkClient {
     pub async fn send_search_request(
         &self,
         target_node: &NodeId,
-        node_address: &str,
+        _node_address: &str, // 将来用于网络连接
         _search_request: &SearchRequest,
     ) -> Result<Vec<SearchResult>, NetworkError> {
         // TODO: 实现搜索请求，现在暂时返回空结果

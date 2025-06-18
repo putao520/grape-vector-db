@@ -800,6 +800,22 @@ pub enum VectorDbError {
 
     #[error("功能未实现: {0}")]
     NotImplemented(String),
+
+    #[error("量化错误: {0}")]
+    QuantizationError(String),
+
+    #[error("过滤错误: {0}")]
+    FilterError(String),
+
+    #[error("其他错误: {0}")]
+    Other(String),
+}
+
+impl VectorDbError {
+    /// 创建一个通用错误
+    pub fn other(msg: impl Into<String>) -> Self {
+        VectorDbError::Other(msg.into())
+    }
 }
 
 /// 向量数据库统计信息

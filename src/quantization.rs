@@ -128,7 +128,9 @@ impl BinaryQuantizer {
         original_candidates: &[Vec<f32>],
     ) -> Result<Vec<(usize, f32)>> {
         if candidates_binary.len() != original_candidates.len() {
-            return Err(VectorDbError::QuantizationError);
+            return Err(VectorDbError::QuantizationError(
+                "Mismatch between binary and original candidate counts".to_string()
+            ));
         }
         
         // Stage 1: Fast binary search

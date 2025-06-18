@@ -119,20 +119,20 @@
 pub mod advanced_storage;
 pub mod concurrent;
 pub mod distributed;
+pub mod filtering;
 pub mod index;
 pub mod performance;
-// TODO: Add missing dependencies (bitvec, hamming) to enable quantization
-// pub mod quantization;
+pub mod quantization;
 pub mod query_engine;
 pub mod storage;
 pub mod types;
-// TODO: Add missing dependencies (geo, rstar, sqlparser) to enable filtering
-// pub mod filtering;
 
 // 重新导出主要类型
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
+pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};
 pub use performance::{PerformanceMetrics, PerformanceMonitor};
+pub use quantization::{BinaryQuantizer, BinaryQuantizationConfig, BinaryVector, BinaryVectorStore};
 pub use query_engine::{QueryEngine, QueryEngineConfig, QueryOptimizer};
 pub use storage::{BasicVectorStore, VectorStore};
 pub use types::*;
@@ -200,13 +200,16 @@ impl VectorDatabase {
         }
 
         // 预先收集需要索引的向量，避免后续查询
-        let mut vectors_to_index = Vec::new();
+        // 使用预分配的容量来减少重新分配
+        let mut vectors_to_index = Vec::with_capacity(documents.len());
+        
         for document in &documents {
             if let Some(ref vector) = document.vector {
                 let id = if document.id.is_empty() {
                     uuid::Uuid::new_v4().to_string()
                 } else {
-                    document.id.clone()
+                    // 避免不必要的克隆，直接引用字符串内容
+                    document.id.to_owned()
                 };
                 vectors_to_index.push((id, vector.clone()));
             }
@@ -289,7 +292,9 @@ impl VectorDatabase {
     ) -> Result<Vec<Document>, VectorDbError> {
         let storage = self.storage.read().await;
         let ids = storage.list_document_ids(offset, limit).await?;
-        let mut documents = Vec::new();
+        
+        // 预分配容量以减少重新分配
+        let mut documents = Vec::with_capacity(ids.len());
 
         for id in ids {
             if let Some(record) = storage.get_document(&id).await? {

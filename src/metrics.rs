@@ -78,7 +78,9 @@ impl QueryTimeStats {
         }
 
         let mut sorted: Vec<f64> = self.times.iter().cloned().collect();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let index = ((sorted.len() as f64 - 1.0) * p / 100.0).round() as usize;
         sorted[index.min(sorted.len() - 1)]
