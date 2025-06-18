@@ -120,7 +120,7 @@ pub mod advanced_storage;
 pub mod benchmark;
 pub mod concurrent;
 pub mod config;
-pub mod distributed;
+// pub mod distributed; // Temporarily commented out due to compilation errors
 pub mod embedded;
 pub mod embeddings;
 pub mod enterprise;
