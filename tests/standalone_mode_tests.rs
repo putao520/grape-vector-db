@@ -10,9 +10,38 @@ mod test_framework;
 
 use anyhow::Result;
 use std::time::Duration;
+use std::collections::HashMap;
+use chrono;
 
 use grape_vector_db::types::*;
 use test_framework::*;
+
+// Helper function to create test SearchResult
+fn create_test_search_result(id: &str, score: f32) -> SearchResult {
+    let now = chrono::Utc::now();
+    let document = DocumentRecord {
+        id: id.to_string(),
+        content: format!("test content for {}", id),
+        title: format!("Test Document {}", id),
+        language: "zh".to_string(),
+        package_name: "test".to_string(),
+        version: "1.0".to_string(),
+        doc_type: "test".to_string(),
+        vector: None,
+        metadata: HashMap::new(),
+        embedding: vec![0.1; 768], // dummy embedding
+        sparse_representation: None,
+        created_at: now,
+        updated_at: now,
+    };
+    
+    SearchResult {
+        document,
+        score,
+        relevance_score: Some(score),
+        matched_snippets: Some(vec![format!("snippet for {}", id)]),
+    }
+}
 
 /// 单机模式服务测试
 #[cfg(test)]
@@ -133,12 +162,10 @@ mod standalone_service_tests {
         // 在真实实现中，这里会使用gRPC客户端
         let mut results = Vec::new();
         for i in 0..limit.min(3) {
-            results.push(SearchResult {
-                id: format!("grpc_result_{}", i),
-                score: 0.9 - (i as f32 * 0.1),
-                document: None,
-                metadata: std::collections::HashMap::new(),
-            });
+            results.push(create_test_search_result(
+                &format!("grpc_result_{}", i),
+                0.9 - (i as f32 * 0.1)
+            ));
         }
         Ok(results)
     }
@@ -196,12 +223,10 @@ mod standalone_service_tests {
 
         let mut results = Vec::new();
         for i in 0..limit.min(5) {
-            results.push(SearchResult {
-                id: format!("rest_result_{}", i),
-                score: 0.95 - (i as f32 * 0.05),
-                document: None,
-                metadata: std::collections::HashMap::new(),
-            });
+            results.push(create_test_search_result(
+                &format!("rest_result_{}", i),
+                0.95 - (i as f32 * 0.05)
+            ));
         }
         Ok(results)
     }
@@ -246,7 +271,8 @@ mod standalone_persistence_tests {
             println!("插入数据后统计: {:?}", stats);
 
             // 停止服务
-            for i in 0..cluster.cluster_type.node_count() {
+            let node_count = cluster.active_node_count().await;
+            for i in 0..node_count {
                 cluster.stop_node(&format!("node_{}", i)).await.unwrap();
             }
         }
@@ -370,19 +396,18 @@ mod standalone_persistence_tests {
         let mut results = Vec::new();
         for i in 0..limit.min(3) {
             let score = 0.9 - (i as f32 * 0.1);
-            results.push(SearchResult {
-                id: format!("vector_result_{}", i),
-                score,
-                document: None,
-                metadata: std::collections::HashMap::new(),
-            });
+            results.push(create_test_search_result(
+                &format!("vector_result_{}", i),
+                score
+            ));
         }
         Ok(results)
     }
 
     async fn restart_service(cluster: &TestCluster) -> Result<()> {
         // 停止服务
-        for i in 0..cluster.cluster_type.node_count() {
+        let node_count = cluster.active_node_count().await;
+        for i in 0..node_count {
             cluster.stop_node(&format!("node_{}", i)).await?;
         }
 
@@ -694,45 +719,22 @@ mod standalone_performance_tests {
             SearchType::Text => {
                 // 模拟文本搜索
                 tokio::time::sleep(Duration::from_millis(5)).await;
-                Ok(vec![SearchResult {
-                    id: "text_result".to_string(),
-                    score: 0.85,
-                    document: None,
-                    metadata: std::collections::HashMap::new(),
-                }])
+                Ok(vec![create_test_search_result("text_result", 0.85)])
             }
             SearchType::Exact => {
                 // 模拟精确匹配
                 tokio::time::sleep(Duration::from_millis(2)).await;
                 cluster.get_document(query).await.map(|doc| {
-                    if doc.is_some() {
-                        vec![SearchResult {
-                            id: query.to_string(),
-                            score: 1.0,
-                            document: None,
-                            metadata: std::collections::HashMap::new(),
-                        }]
-                    } else {
-                        vec![]
-                    }
-                })
+                    // Assuming get_document returns Option<Document> or Document
+                    vec![create_test_search_result(query, 1.0)]
+                }).or_else(|_| Ok(vec![]))
             }
             SearchType::Fuzzy => {
                 // 模拟模糊搜索
                 tokio::time::sleep(Duration::from_millis(15)).await;
                 Ok(vec![
-                    SearchResult {
-                        id: "fuzzy_result_1".to_string(),
-                        score: 0.75,
-                        document: None,
-                        metadata: std::collections::HashMap::new(),
-                    },
-                    SearchResult {
-                        id: "fuzzy_result_2".to_string(),
-                        score: 0.70,
-                        document: None,
-                        metadata: std::collections::HashMap::new(),
-                    },
+                    create_test_search_result("fuzzy_result_1", 0.75),
+                    create_test_search_result("fuzzy_result_2", 0.70),
                 ])
             }
         }
