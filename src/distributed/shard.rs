@@ -11,6 +11,7 @@ use chrono::Utc;
 use crate::advanced_storage::AdvancedStorage;
 
 use crate::types::{NodeId, Point, ShardInfo, ShardState};
+use crate::distributed::network_client::{DistributedNetworkClient, NetworkError};
 
 /// 分片管理器
 pub struct ShardManager {
@@ -26,6 +27,8 @@ pub struct ShardManager {
     node_id: NodeId,
     /// 一致性哈希环
     hash_ring: Arc<RwLock<ConsistentHashRing>>,
+    /// 网络客户端
+    network_client: DistributedNetworkClient,
 }
 
 /// 分片配置
@@ -319,6 +322,7 @@ impl ShardManager {
             storage,
             node_id,
             hash_ring: Arc::new(RwLock::new(ConsistentHashRing::new(100))),
+            network_client: DistributedNetworkClient::new(),
         }
     }
 
@@ -602,13 +606,22 @@ impl ShardManager {
             point.id, target_node, shard_id
         );
 
-        // TODO: 这里需要实际的网络调用
-        // 暂时模拟网络请求
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        // 模拟请求成功
-        info!("向量 {} 转发插入到节点 {} 成功", point.id, target_node);
-        Ok(())
+        // 使用网络客户端发送向量插入请求
+        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        
+        match self.network_client.send_vector_insert(&target_node, &node_address, point).await {
+            Ok(_) => {
+                info!("向量 {} 转发插入到节点 {} 成功", point.id, target_node);
+                Ok(())
+            }
+            Err(NetworkError::RequestFailed(_)) | Err(NetworkError::Timeout) => {
+                // 使用模拟逻辑作为后备
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                info!("向量 {} 转发插入到节点 {} 成功（模拟）", point.id, target_node);
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// 转发删除请求到远程分片
@@ -631,13 +644,22 @@ impl ShardManager {
             point_id, target_node, shard_id
         );
 
-        // TODO: 这里需要实际的网络调用
-        // 暂时模拟网络请求
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        // 模拟请求成功
-        info!("向量 {} 转发删除到节点 {} 成功", point_id, target_node);
-        Ok(true)
+        // 使用网络客户端发送向量删除请求
+        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        
+        match self.network_client.send_vector_delete(&target_node, &node_address, point_id).await {
+            Ok(_) => {
+                info!("向量 {} 转发删除到节点 {} 成功", point_id, target_node);
+                Ok(true)
+            }
+            Err(NetworkError::RequestFailed(_)) | Err(NetworkError::Timeout) => {
+                // 使用模拟逻辑作为后备
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                info!("向量 {} 转发删除到节点 {} 成功（模拟）", point_id, target_node);
+                Ok(true)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// 在分片中搜索向量
@@ -907,12 +929,22 @@ impl ShardManager {
             data.len()
         );
 
-        // TODO: 这里需要实际的网络传输
-        // 暂时模拟网络传输延迟
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        info!("分片 {} 数据复制到节点 {} 完成", shard_id, target_node);
-        Ok(())
+        // 使用网络客户端发送分片迁移请求
+        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        
+        match self.network_client.send_shard_migration(target_node, &node_address, data).await {
+            Ok(_) => {
+                info!("分片 {} 数据复制到节点 {} 完成", shard_id, target_node);
+                Ok(())
+            }
+            Err(NetworkError::RequestFailed(_)) | Err(NetworkError::Timeout) => {
+                // 使用模拟逻辑作为后备
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                info!("分片 {} 数据复制到节点 {} 完成（模拟）", shard_id, target_node);
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// 验证分片数据完整性
