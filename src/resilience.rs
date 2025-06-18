@@ -447,7 +447,7 @@ impl RetryExecutor {
             RetryStrategy::FixedDelay(delay) => *delay,
             RetryStrategy::ExponentialBackoff { initial_delay, max_delay, multiplier } => {
                 let delay = initial_delay.as_millis() as f64 * multiplier.powi(attempt as i32);
-                Duration::from_millis(delay.min(*max_delay.as_millis() as f64) as u64)
+                Duration::from_millis(delay.min(max_delay.as_millis() as f64) as u64)
             }
             RetryStrategy::LinearBackoff { initial_delay, increment } => {
                 *initial_delay + *increment * attempt as u32

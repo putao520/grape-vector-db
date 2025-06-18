@@ -755,6 +755,19 @@ pub struct ClusterInfo {
     pub version: u64,
 }
 
+impl Default for ClusterInfo {
+    fn default() -> Self {
+        Self {
+            config: ClusterConfig::default(),
+            nodes: HashMap::new(),
+            leader_id: None,
+            shard_map: ShardMap::default(),
+            stats: ClusterStats::default(),
+            version: 0,
+        }
+    }
+}
+
 /// 分片映射
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShardMap {
@@ -815,6 +828,9 @@ pub enum QueryResponse {
 pub enum VectorDbError {
     #[error("存储错误: {0}")]
     StorageError(String),
+    
+    #[error("存储错误: {0}")]
+    Storage(String), // Alternative name for compatibility
 
     #[error("序列化错误: {0}")]
     SerializationError(String),

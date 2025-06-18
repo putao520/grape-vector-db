@@ -250,10 +250,10 @@ impl QueryEngine {
     pub fn get_index_stats(&self) -> IndexStats {
         let hnsw_stats = self.hnsw_index.get_stats();
         IndexStats {
-            point_count: hnsw_stats.point_count,
+            point_count: hnsw_stats.vector_count, // Map vector_count to point_count
             dimension: hnsw_stats.dimension,
-            is_built: hnsw_stats.is_built,
-            memory_usage_mb: hnsw_stats.memory_usage_mb,
+            is_built: !hnsw_stats.index_type.is_empty(), // Derive is_built from index_type
+            memory_usage_mb: hnsw_stats.memory_usage as f64 / 1024.0 / 1024.0, // Convert bytes to MB
         }
     }
 

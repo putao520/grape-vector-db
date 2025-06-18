@@ -95,6 +95,9 @@ smallvec = "1.0"        # 小向量优化
 # 异步工具
 futures = "0.3"
 
+# 企业级节点识别
+gethostname = "0.5"
+
 # 随机数生成
 rand = "0.8"
 

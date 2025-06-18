@@ -53,6 +53,8 @@ impl ColumnFamilies {
     pub const VECTORS: &'static str = "vectors";
     pub const METADATA: &'static str = "metadata";
     pub const INDEX: &'static str = "index";
+    pub const INDICES: &'static str = "indices"; // For compatibility
+    pub const DOCUMENTS: &'static str = "documents"; // For compatibility
     pub const SPARSE: &'static str = "sparse";
     pub const QUANTIZED: &'static str = "quantized";
     pub const STATS: &'static str = "stats";
