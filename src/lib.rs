@@ -117,19 +117,29 @@
 //! ```
 
 pub mod advanced_storage;
+pub mod benchmark;
 pub mod concurrent;
+pub mod config;
 pub mod distributed;
+pub mod embedded;
+pub mod embeddings;
 pub mod filtering;
+pub mod hybrid;
 pub mod index;
+pub mod metrics;
 pub mod performance;
 pub mod quantization;
+pub mod query;
 pub mod query_engine;
+pub mod sparse;
 pub mod storage;
 pub mod types;
 
 // 重新导出主要类型
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
+pub use embedded::EmbeddedVectorDB;
 pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
+pub use hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};
 pub use performance::{PerformanceMetrics, PerformanceMonitor};
 pub use quantization::{BinaryQuantizer, BinaryQuantizationConfig, BinaryVector, BinaryVectorStore};

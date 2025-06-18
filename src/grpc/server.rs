@@ -254,29 +254,248 @@ impl VectorDbService for VectorDbServiceImpl {
         Ok(Response::new(response))
     }
 
-    // TODO: 实现其他gRPC方法
-    async fn upsert_vector(&self, _request: Request<UpsertVectorRequest>) -> Result<Response<UpsertVectorResponse>, Status> {
-        Err(Status::unimplemented("upsert_vector not implemented yet"))
+    /// 插入或更新向量
+    async fn upsert_vector(&self, request: Request<UpsertVectorRequest>) -> Result<Response<UpsertVectorResponse>, Status> {
+        let req = request.into_inner();
+        
+        // 验证请求参数
+        if req.id.is_empty() {
+            return Err(Status::invalid_argument("向量ID不能为空"));
+        }
+        
+        if req.vector.is_empty() {
+            return Err(Status::invalid_argument("向量数据不能为空"));
+        }
+
+        // 创建文档对象
+        let document = crate::types::Document {
+            id: req.id.clone(),
+            content: req.content.unwrap_or_default(),
+            title: req.title,
+            language: req.language,
+            package_name: req.package_name,
+            version: req.version,
+            doc_type: req.doc_type,
+            vector: Some(req.vector),
+            metadata: req.metadata.unwrap_or_default(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        // 插入文档
+        let database = self.database.read().await;
+        match database.add_document(document).await {
+            Ok(doc_id) => {
+                let response = UpsertVectorResponse {
+                    success: true,
+                    id: doc_id,
+                    error: None,
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("插入向量失败: {}", e);
+                let response = UpsertVectorResponse {
+                    success: false,
+                    id: String::new(),
+                    error: Some(format!("插入失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
-    async fn delete_vector(&self, _request: Request<DeleteVectorRequest>) -> Result<Response<DeleteVectorResponse>, Status> {
-        Err(Status::unimplemented("delete_vector not implemented yet"))
+    /// 删除向量
+    async fn delete_vector(&self, request: Request<DeleteVectorRequest>) -> Result<Response<DeleteVectorResponse>, Status> {
+        let req = request.into_inner();
+        
+        if req.id.is_empty() {
+            return Err(Status::invalid_argument("向量ID不能为空"));
+        }
+
+        let database = self.database.read().await;
+        match database.delete_document(&req.id).await {
+            Ok(deleted) => {
+                let response = DeleteVectorResponse {
+                    success: deleted,
+                    error: if deleted { None } else { Some("文档未找到".to_string()) },
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("删除向量失败: {}", e);
+                let response = DeleteVectorResponse {
+                    success: false,
+                    error: Some(format!("删除失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
-    async fn search_vectors(&self, _request: Request<SearchVectorRequest>) -> Result<Response<SearchVectorResponse>, Status> {
-        Err(Status::unimplemented("search_vectors not implemented yet"))
+    /// 搜索向量
+    async fn search_vectors(&self, request: Request<SearchVectorRequest>) -> Result<Response<SearchVectorResponse>, Status> {
+        let req = request.into_inner();
+        
+        if req.query.is_empty() {
+            return Err(Status::invalid_argument("搜索查询不能为空"));
+        }
+
+        let limit = if req.limit > 0 { req.limit as usize } else { 10 };
+
+        let database = self.database.read().await;
+        match database.semantic_search(&req.query, limit).await {
+            Ok(results) => {
+                let grpc_results: Vec<VectorSearchResult> = results.into_iter().map(|r| {
+                    VectorSearchResult {
+                        id: r.document.id,
+                        score: r.score,
+                        content: Some(r.document.content),
+                        title: r.document.title,
+                        metadata: r.document.metadata,
+                        vector: r.document.vector.unwrap_or_default(),
+                    }
+                }).collect();
+
+                let response = SearchVectorResponse {
+                    results: grpc_results,
+                    total_count: results.len() as u32,
+                    error: None,
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("搜索向量失败: {}", e);
+                let response = SearchVectorResponse {
+                    results: vec![],
+                    total_count: 0,
+                    error: Some(format!("搜索失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
-    async fn get_vector(&self, _request: Request<GetVectorRequest>) -> Result<Response<GetVectorResponse>, Status> {
-        Err(Status::unimplemented("get_vector not implemented yet"))
+    /// 获取向量
+    async fn get_vector(&self, request: Request<GetVectorRequest>) -> Result<Response<GetVectorResponse>, Status> {
+        let req = request.into_inner();
+        
+        if req.id.is_empty() {
+            return Err(Status::invalid_argument("向量ID不能为空"));
+        }
+
+        let database = self.database.read().await;
+        match database.get_document(&req.id).await {
+            Ok(Some(document)) => {
+                let response = GetVectorResponse {
+                    found: true,
+                    vector: document.vector.unwrap_or_default(),
+                    content: Some(document.content),
+                    title: document.title,
+                    metadata: document.metadata,
+                    error: None,
+                };
+                Ok(Response::new(response))
+            }
+            Ok(None) => {
+                let response = GetVectorResponse {
+                    found: false,
+                    vector: vec![],
+                    content: None,
+                    title: None,
+                    metadata: HashMap::new(),
+                    error: Some("文档未找到".to_string()),
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("获取向量失败: {}", e);
+                let response = GetVectorResponse {
+                    found: false,
+                    vector: vec![],
+                    content: None,
+                    title: None,
+                    metadata: HashMap::new(),
+                    error: Some(format!("获取失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
-    async fn join_cluster(&self, _request: Request<JoinClusterRequest>) -> Result<Response<JoinClusterResponse>, Status> {
-        Err(Status::unimplemented("join_cluster not implemented yet"))
+    /// 加入集群
+    async fn join_cluster(&self, request: Request<JoinClusterRequest>) -> Result<Response<JoinClusterResponse>, Status> {
+        let req = request.into_inner();
+        
+        if req.node_id.is_empty() {
+            return Err(Status::invalid_argument("节点ID不能为空"));
+        }
+
+        if req.node_address.is_empty() {
+            return Err(Status::invalid_argument("节点地址不能为空"));
+        }
+
+        // 创建节点信息
+        let node_info = crate::types::NodeInfo {
+            id: req.node_id.clone(),
+            address: req.node_address,
+            port: 8080, // 默认端口
+            state: crate::types::NodeState::Joining,
+            last_heartbeat: chrono::Utc::now().timestamp() as u64,
+        };
+
+        // 尝试加入集群
+        match self.cluster_manager.add_node(node_info).await {
+            Ok(_) => {
+                info!("节点 {} 成功加入集群", req.node_id);
+                let response = JoinClusterResponse {
+                    success: true,
+                    cluster_id: "grape-vector-cluster".to_string(), // 固定集群ID
+                    assigned_node_id: req.node_id,
+                    error: None,
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("节点加入集群失败: {}", e);
+                let response = JoinClusterResponse {
+                    success: false,
+                    cluster_id: String::new(),
+                    assigned_node_id: String::new(),
+                    error: Some(format!("加入失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
-    async fn leave_cluster(&self, _request: Request<LeaveClusterRequest>) -> Result<Response<LeaveClusterResponse>, Status> {
-        Err(Status::unimplemented("leave_cluster not implemented yet"))
+    /// 离开集群
+    async fn leave_cluster(&self, request: Request<LeaveClusterRequest>) -> Result<Response<LeaveClusterResponse>, Status> {
+        let req = request.into_inner();
+        
+        if req.node_id.is_empty() {
+            return Err(Status::invalid_argument("节点ID不能为空"));
+        }
+
+        // 尝试离开集群
+        match self.cluster_manager.remove_node(&req.node_id).await {
+            Ok(_) => {
+                info!("节点 {} 成功离开集群", req.node_id);
+                let response = LeaveClusterResponse {
+                    success: true,
+                    error: None,
+                };
+                Ok(Response::new(response))
+            }
+            Err(e) => {
+                error!("节点离开集群失败: {}", e);
+                let response = LeaveClusterResponse {
+                    success: false,
+                    error: Some(format!("离开失败: {}", e)),
+                };
+                Ok(Response::new(response))
+            }
+        }
     }
 
     async fn get_cluster_info(&self, _request: Request<GetClusterInfoRequest>) -> Result<Response<GetClusterInfoResponse>, Status> {
