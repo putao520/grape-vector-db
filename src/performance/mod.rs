@@ -15,7 +15,7 @@ pub use search_optimizer::{SearchOptimizer, SearchOptimizerConfig};
 pub use concurrent_test::ConcurrentPerformanceTest;
 
 /// 性能统计信息
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PerformanceStats {
     /// 查询总数
     pub total_queries: u64,

@@ -123,6 +123,7 @@ pub mod config;
 pub mod distributed;
 pub mod embedded;
 pub mod embeddings;
+pub mod enterprise;
 pub mod filtering;
 pub mod hybrid;
 pub mod index;
@@ -131,6 +132,7 @@ pub mod performance;
 pub mod quantization;
 pub mod query;
 pub mod query_engine;
+pub mod resilience;
 pub mod sparse;
 pub mod storage;
 pub mod types;
@@ -138,12 +140,21 @@ pub mod types;
 // 重新导出主要类型
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
 pub use embedded::EmbeddedVectorDB;
+pub use enterprise::{
+    AuthenticationManager, EnterpriseConfig, Role, Permission, User, ApiKey, JwtToken,
+    SecurityPolicy, AuditLogEntry, EnterpriseError, EnterpriseResult
+};
 pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
 pub use hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};
 pub use performance::{PerformanceMetrics, PerformanceMonitor};
 pub use quantization::{BinaryQuantizer, BinaryQuantizationConfig, BinaryVector, BinaryVectorStore};
 pub use query_engine::{QueryEngine, QueryEngineConfig, QueryOptimizer};
+pub use resilience::{
+    ResilienceManager, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState,
+    TokenBucketRateLimiter, RateLimiterConfig, RetryExecutor, RetryConfig, RetryStrategy,
+    TimeoutWrapper, ResourcePool, ResilienceError, ResilienceResult
+};
 pub use storage::{BasicVectorStore, VectorStore};
 pub use types::*;
 
@@ -156,8 +167,67 @@ pub mod errors {
 use std::path::PathBuf;
 use std::sync::Arc;
 use crate::performance::PerformanceStats;
+use serde::{Deserialize, Serialize};
 
-/// 向量数据库主结构
+/// 健康状态枚举
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+/// 系统健康状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemHealthStatus {
+    pub overall_status: HealthStatus,
+    pub timestamp: std::time::SystemTime,
+    pub database_status: HealthStatus,
+    pub storage_status: HealthStatus,
+    pub index_status: HealthStatus,
+    pub auth_status: Option<HealthStatus>,
+    pub resilience_status: Option<crate::resilience::ResilienceStatus>,
+    pub performance_metrics: Option<PerformanceStats>,
+    pub error_details: Vec<String>,
+}
+
+/// 企业级指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnterpriseMetrics {
+    pub timestamp: std::time::SystemTime,
+    pub database_metrics: DatabaseMetrics,
+    pub performance_metrics: EnterprisePerformanceMetrics,
+    pub auth_metrics: Option<AuthMetrics>,
+    pub resilience_metrics: Option<crate::resilience::ResilienceStatus>,
+}
+
+/// 数据库指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseMetrics {
+    pub document_count: u64,
+    pub index_count: u64,
+    pub total_size_bytes: u64,
+    pub memory_usage_mb: f64,
+}
+
+/// 企业级性能指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnterprisePerformanceMetrics {
+    pub total_queries: u64,
+    pub average_query_time_ms: f64,
+    pub cache_hit_rate: f64,
+    pub qps: f64,
+}
+
+/// 认证指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthMetrics {
+    pub total_users: u64,
+    pub active_sessions: u64,
+    pub failed_auth_attempts: u64,
+}
+
+/// 向量数据库主结构（企业版）
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct VectorDatabase {
@@ -165,6 +235,10 @@ pub struct VectorDatabase {
     vector_index: Arc<tokio::sync::RwLock<dyn VectorIndex>>,
     query_engine: QueryEngine,
     config: VectorDbConfig,
+    // 企业级功能组件
+    auth_manager: Option<Arc<AuthenticationManager>>,
+    resilience_manager: Option<Arc<ResilienceManager>>,
+    enterprise_config: Option<EnterpriseConfig>,
 }
 
 impl VectorDatabase {
@@ -191,7 +265,47 @@ impl VectorDatabase {
             vector_index,
             query_engine,
             config: updated_config,
+            auth_manager: None,
+            resilience_manager: None,
+            enterprise_config: None,
         })
+    }
+
+    /// 创建企业版向量数据库实例
+    pub async fn new_enterprise(
+        db_path: PathBuf,
+        config: VectorDbConfig,
+        enterprise_config: EnterpriseConfig,
+    ) -> Result<Self, VectorDbError> {
+        let mut db = Self::new(db_path, config).await?;
+        
+        // 初始化企业级组件
+        let auth_manager = Arc::new(AuthenticationManager::new());
+        let resilience_manager = Arc::new(ResilienceManager::new(
+            std::time::Duration::from_secs(30)
+        ));
+
+        // 配置熔断器
+        resilience_manager.register_circuit_breaker(
+            "vector_search".to_string(),
+            CircuitBreakerConfig::default(),
+        );
+        resilience_manager.register_circuit_breaker(
+            "document_insert".to_string(),
+            CircuitBreakerConfig::default(),
+        );
+
+        // 配置限流器
+        resilience_manager.register_rate_limiter(
+            "api_requests".to_string(),
+            RateLimiterConfig::default(),
+        );
+
+        db.auth_manager = Some(auth_manager);
+        db.resilience_manager = Some(resilience_manager);
+        db.enterprise_config = Some(enterprise_config);
+
+        Ok(db)
     }
 
     /// 添加文档

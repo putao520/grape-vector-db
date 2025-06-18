@@ -199,7 +199,7 @@ impl MetricsCollector {
 
         // 更新metrics
         metrics::histogram!("query_duration_ms", time_ms);
-        metrics::counter!("queries_total").increment(1);
+        metrics::counter!("queries_total", 1);
         
         // 更新QPS gauge
         let qps = self.qps_calculator.read().current_qps();
@@ -221,7 +221,7 @@ impl MetricsCollector {
     /// 记录错误
     pub fn record_error(&self) {
         self.total_errors.fetch_add(1, Ordering::Relaxed);
-        metrics::counter!("errors_total").increment(1);
+        metrics::counter!("errors_total", 1);
     }
 
     /// 记录索引构建时间
