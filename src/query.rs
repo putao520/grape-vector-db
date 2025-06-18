@@ -37,11 +37,7 @@ impl QueryEngine {
         let _timer = QueryTimer::new(self.metrics.clone());
 
         // 添加到向量索引
-        let vector_point = crate::types::VectorPoint {
-            vector: record.embedding.clone(),
-            document_id: record.id.clone(),
-        };
-        self.hnsw_index.add_point(vector_point)?;
+        self.hnsw_index.add_vector(record.id.clone(), record.embedding.clone())?;
 
         Ok(())
     }
@@ -74,9 +70,9 @@ impl QueryEngine {
         // 向量搜索
         if let Some(vector) = query_vector {
             let results = self.hnsw_index.search(vector, limit * 2)?;
-            for (i, result) in results.iter().enumerate() {
-                let score = result.similarity * vector_weight * (1.0 - i as f32 / results.len() as f32);
-                vector_results.insert(result.document_id.clone(), score);
+            for (i, (document_id, similarity)) in results.iter().enumerate() {
+                let score = similarity * vector_weight * (1.0 - i as f32 / results.len() as f32);
+                vector_results.insert(document_id.clone(), score);
             }
         }
 

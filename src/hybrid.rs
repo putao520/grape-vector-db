@@ -216,11 +216,7 @@ impl HybridSearchEngine {
         record: &DocumentRecord
     ) -> Result<()> {
         // 添加到密集向量索引
-        let vector_point = crate::types::VectorPoint {
-            vector: record.embedding.clone(),
-            document_id: record.id.clone(),
-        };
-        self.dense_engine.add_point(vector_point)?;
+        self.dense_engine.add_vector(record.id.clone(), record.embedding.clone())?;
 
         // 如果有稀疏向量表示，添加到稀疏索引
         if let Some(sparse_repr) = &record.sparse_representation {
@@ -276,7 +272,7 @@ impl HybridSearchEngine {
         let dense_results = if let Some(dense_vector) = &request.dense_vector {
             let results = self.dense_engine.search(dense_vector, request.limit * 2)?;
             results.into_iter()
-                .map(|r| (r.document_id, r.similarity))
+                .map(|(id, score)| (id, score))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()

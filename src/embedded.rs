@@ -461,7 +461,7 @@ impl EmbeddedVectorDB {
             self.query_engine.vector_search(&*self.storage, &request.vector, request.limit).await?
         } else if let Some(ref query_text) = request.query {
             // 文本搜索 (将转换为向量搜索)
-            self.query_engine.text_search(query_text, request.limit).await?
+            self.query_engine.text_search(&*self.storage, query_text, request.limit).await?
         } else {
             return Err(VectorDbError::Other("Either vector or query must be provided".into()));
         };
@@ -469,7 +469,7 @@ impl EmbeddedVectorDB {
         let search_time = start.elapsed();
         
         // 更新度量
-        self.metrics.record_search_latency(search_time);
+        self.metrics.record_query_time(search_time.as_millis() as f64);
         self.counters.increment_search_operations();
         
         Ok(SearchResponse {
@@ -495,36 +495,44 @@ impl EmbeddedVectorDB {
         
         // 根据过滤器类型执行删除
         match filter {
-            Filter::Id(id) => {
-                // 按ID删除单个文档
-                if self.storage.delete_document(&id).await? {
-                    deleted_count = 1;
-                }
-            }
-            Filter::Ids(ids) => {
-                // 批量按ID删除
-                for id in ids {
-                    if self.storage.delete_document(&id).await? {
-                        deleted_count += 1;
+            Filter::Must(conditions) => {
+                // 检查是否是ID相等条件
+                for condition in conditions {
+                    if let Condition::Equals { field, value } = condition {
+                        if field == "id" {
+                            if let Some(id_str) = value.as_str() {
+                                if self.storage.delete_document(id_str).await? {
+                                    deleted_count += 1;
+                                }
+                            }
+                        }
                     }
                 }
             }
-            Filter::Expression(_expr) => {
-                // 基于表达式的复杂过滤删除
-                // 首先找到匹配的文档
-                let matching_docs = self.storage.filter_documents(&filter).await?;
-                for doc_id in matching_docs {
-                    if self.storage.delete_document(&doc_id).await? {
-                        deleted_count += 1;
+            Filter::Should(conditions) => {
+                // 删除满足任意条件的文档
+                for condition in conditions {
+                    if let Condition::Equals { field, value } = condition {
+                        if field == "id" {
+                            if let Some(id_str) = value.as_str() {
+                                if self.storage.delete_document(id_str).await? {
+                                    deleted_count += 1;
+                                }
+                            }
+                        }
                     }
                 }
+            }
+            Filter::MustNot(_) | Filter::Nested { .. } => {
+                // 复杂过滤条件暂不支持
+                return Err(VectorDbError::NotImplemented("Complex filter deletion not implemented".into()));
             }
         }
         
         let delete_time = start.elapsed();
         
         // 更新度量
-        self.metrics.record_delete_latency(delete_time);
+        self.metrics.record_query_time(delete_time.as_millis() as f64);
         self.counters.increment_operations();
         
         tracing::info!("Deleted {} documents in {:?}", deleted_count, delete_time);
