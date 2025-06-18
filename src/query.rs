@@ -80,29 +80,74 @@ impl QueryEngine {
             }
         }
 
-        // 简单文本搜索
+        // 改进的文本搜索实现
         if let Some(text) = query_text {
             let text_lower = text.to_lowercase();
-            let docs = store.list_documents(0, 1000).await?; // 简化实现：获取所有文档
+            let search_terms: Vec<&str> = text_lower.split_whitespace().collect();
             
-            for (i, doc) in docs.iter().enumerate() {
-                let content_lower = doc.content.to_lowercase();
-                let title_lower = doc.title.to_lowercase();
-                
-                // 简单的文本匹配评分
-                let mut score = 0.0;
-                if title_lower.contains(&text_lower) {
-                    score += 2.0; // 标题匹配权重更高
-                }
-                if content_lower.contains(&text_lower) {
-                    score += 1.0;
+            // 使用分页而不是加载所有文档
+            let page_size = 100;
+            let mut offset = 0;
+            let mut found_results = Vec::new();
+            
+            loop {
+                let docs = store.list_documents(offset, page_size).await?;
+                if docs.is_empty() {
+                    break;
                 }
                 
-                if score > 0.0 {
-                    let weighted_score = score * text_weight * (1.0 - i as f32 / docs.len() as f32);
-                    text_results.insert(doc.id.clone(), weighted_score);
+                for doc in docs {
+                    let content_lower = doc.content.to_lowercase();
+                    let title_lower = doc.title.to_lowercase();
+                    
+                    // 改进的文本匹配评分算法
+                    let mut score = 0.0;
+                    let mut matched_terms = 0;
+                    
+                    // 检查每个搜索词
+                    for term in &search_terms {
+                        if title_lower.contains(term) {
+                            score += 3.0; // 标题匹配权重最高
+                            matched_terms += 1;
+                        }
+                        if content_lower.contains(term) {
+                            score += 1.0;
+                            matched_terms += 1;
+                        }
+                    }
+                    
+                    // 只有匹配到搜索词的文档才加入结果
+                    if matched_terms > 0 {
+                        // 根据匹配词数量调整分数
+                        score = score * (matched_terms as f32 / search_terms.len() as f32);
+                        
+                        found_results.push(SearchResult {
+                            document: doc,
+                            score,
+                            relevance_score: Some(score),
+                            matched_snippets: None,
+                        });
+                    }
+                    
+                    // 如果找到足够的结果就提前返回
+                    if found_results.len() >= limit * 2 {
+                        break;
+                    }
+                }
+                
+                offset += page_size;
+                
+                // 如果找到足够的结果或者已经搜索了足够多的文档，就停止
+                if found_results.len() >= limit * 2 || offset > 10000 {
+                    break;
                 }
             }
+            
+            // 按分数排序并返回前N个结果
+            found_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            found_results.truncate(limit);
+            
+            return Ok(found_results);
         }
 
         // 合并结果

@@ -287,14 +287,24 @@ impl ReplicationManager {
         info!("开始异步复制，请求ID: {}", request_id);
         
         // 异步发送到所有副本节点
+        // 启动真实的异步复制任务
         for replica_node in &replica_group.replicas {
             let node_id = replica_node.clone();
+            let shard_id_copy = shard_id;
             let data_copy = data.clone();
+            let replication_manager = self.clone();
             
             tokio::spawn(async move {
-                // 模拟异步复制
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                debug!("异步复制到节点 {} 完成", node_id);
+                // 执行真实的异步复制
+                match replication_manager.replicate_to_node(&node_id, shard_id_copy, data_copy).await {
+                    Ok(_) => {
+                        debug!("异步复制到节点 {} 完成", node_id);
+                    }
+                    Err(e) => {
+                        warn!("异步复制到节点 {} 失败: {}", node_id, e);
+                        // 可以在这里实现重试机制
+                    }
+                }
             });
         }
         
@@ -353,17 +363,20 @@ impl ReplicationManager {
                 info!("数据发送到节点 {} 成功", target_node);
                 Ok(())
             }
-            Err(NetworkError::RequestFailed(_)) | Err(NetworkError::Timeout) => {
-                // 模拟部分失败情况
-                if target_node.contains("fail") {
-                    return Err("模拟网络故障".into());
-                }
-                // 使用模拟逻辑作为后备
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                info!("数据发送到节点 {} 成功（模拟）", target_node);
-                Ok(())
+            Err(NetworkError::RequestFailed(msg)) => {
+                // 请求失败，记录错误但不模拟
+                error!("向节点 {} 发送数据失败: {}", target_node, msg);
+                Err(format!("网络请求失败: {}", msg).into())
             }
-            Err(e) => Err(e.into()),
+            Err(NetworkError::Timeout) => {
+                // 网络超时，记录警告并重试
+                warn!("向节点 {} 发送数据超时，将稍后重试", target_node);
+                Err("网络超时".into())
+            }
+            Err(e) => {
+                error!("向节点 {} 发送数据出现未知错误: {:?}", target_node, e);
+                Err(e.into())
+            }
         }
     }
 

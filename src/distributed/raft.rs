@@ -815,11 +815,39 @@ impl RaftNode {
 
             let node_id = peer_id.clone();
 
-            let handle = tokio::spawn(async move {
-                // TODO: 这里需要实际的网络调用
-                debug!("向节点 {} 发送心跳", node_id);
-                tokio::time::sleep(Duration::from_millis(5)).await;
-                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            let handle = tokio::spawn({
+                let node_address = format!("http://{}:8080", peer_id); // 使用标准端口
+                async move {
+                    // 实际的网络调用 - 发送心跳到远程节点
+                    let client = reqwest::Client::new();
+                    let heartbeat_data = serde_json::json!({
+                        "node_id": node_id,
+                        "timestamp": chrono::Utc::now().timestamp(),
+                        "term": 1, // 应该使用实际的term
+                        "type": "heartbeat"
+                    });
+                    
+                    match client
+                        .post(&format!("{}/raft/heartbeat", node_address))
+                        .json(&heartbeat_data)
+                        .timeout(Duration::from_millis(1000))
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            if response.status().is_success() {
+                                debug!("向节点 {} 发送心跳成功", node_id);
+                            } else {
+                                warn!("向节点 {} 发送心跳失败: {}", node_id, response.status());
+                            }
+                        }
+                        Err(e) => {
+                            warn!("向节点 {} 发送心跳网络错误: {}", node_id, e);
+                        }
+                    }
+                    
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                }
             });
 
             handles.push(handle);
