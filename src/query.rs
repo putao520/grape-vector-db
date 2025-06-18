@@ -154,10 +154,9 @@ impl QueryEngine {
                     title: doc.title.clone(),
                     content_snippet: self.extract_snippet(&doc.content, query_text),
                     similarity_score: score,
-                    package_name: doc.package_name.clone(),
-                    doc_type: doc.doc_type.clone(),
+                    package_name: Some(doc.package_name.clone()),
+                    doc_type: Some(doc.doc_type.clone()),
                     metadata: doc.metadata.clone(),
-                    score_breakdown: None, // 简单搜索不需要分数分解
                 };
                 final_results.push(result);
             }

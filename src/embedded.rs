@@ -432,7 +432,6 @@ impl EmbeddedVectorDB {
             // 这里可以执行一些轻量级的查询来预热缓存
             tracing::info!("Index preloading completed in {:?}", index_start.elapsed());
         }
-        }
         
         tracing::info!("Database warmup completed in {:?}", start.elapsed());
         Ok(())
@@ -457,9 +456,9 @@ impl EmbeddedVectorDB {
         let start = Instant::now();
         
         // 执行向量搜索
-        let results = if let Some(ref vector) = request.vector {
-            // 向量搜索
-            self.query_engine.vector_search(vector, request.limit).await?
+        let results = if !request.vector.is_empty() {
+            // 向量搜索 - 需要传递storage参数
+            self.query_engine.vector_search(&*self.storage, &request.vector, request.limit).await?
         } else if let Some(ref query_text) = request.query {
             // 文本搜索 (将转换为向量搜索)
             self.query_engine.text_search(query_text, request.limit).await?
@@ -475,8 +474,8 @@ impl EmbeddedVectorDB {
         
         Ok(SearchResponse {
             results,
-            search_time_ms: search_time.as_millis() as u64,
-            total_results: results.len(),
+            query_time_ms: search_time.as_millis() as f64,
+            total_matches: results.len(),
         })
     }
     

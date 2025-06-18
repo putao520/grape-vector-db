@@ -13,7 +13,7 @@ use crate::{
         QueryMetrics
     },
     sparse::{SparseIndex, SimpleTokenizer},
-    index::HnswVectorIndex,
+    index::{HnswVectorIndex, VectorIndex},
     storage::VectorStore,
     errors::{Result, VectorDbError},
 };

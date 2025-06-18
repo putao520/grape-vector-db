@@ -119,6 +119,8 @@ pub struct BM25Stats {
 pub struct SearchRequest {
     /// 查询向量
     pub vector: Vec<f32>,
+    /// 文本查询（用于混合搜索）
+    pub query: Option<String>,
     /// 返回结果数量
     pub limit: usize,
     /// 过滤条件（可选）

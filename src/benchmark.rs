@@ -283,7 +283,7 @@ impl BenchmarkSuite {
     fn calculate_precision_recall(&self, query: &TestQuery, results: &[SearchResult]) -> (f64, f64) {
         let relevant_docs: std::collections::HashSet<_> = query.expected_results.iter().collect();
         let retrieved_docs: std::collections::HashSet<_> = results.iter()
-            .map(|r| &r.document_id)
+            .map(|r| &r.document.id)
             .collect();
 
         let relevant_retrieved = relevant_docs.intersection(&retrieved_docs).count();
@@ -330,7 +330,7 @@ impl BenchmarkSuite {
             .take(k)
             .enumerate()
             .map(|(i, result)| {
-                let rel = relevance.get(&result.document_id).copied().unwrap_or(0.0);
+                let rel = relevance.get(&result.document.id).copied().unwrap_or(0.0);
                 let rank = i + 1;
                 rel as f64 / (rank as f64).log2()
             })
