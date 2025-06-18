@@ -119,20 +119,20 @@
 pub mod advanced_storage;
 pub mod concurrent;
 pub mod distributed;
+pub mod filtering;
 pub mod index;
 pub mod performance;
-// TODO: Add missing dependencies (bitvec, hamming) to enable quantization
-// pub mod quantization;
+pub mod quantization;
 pub mod query_engine;
 pub mod storage;
 pub mod types;
-// TODO: Add missing dependencies (geo, rstar, sqlparser) to enable filtering
-// pub mod filtering;
 
 // 重新导出主要类型
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
+pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};
 pub use performance::{PerformanceMetrics, PerformanceMonitor};
+pub use quantization::{BinaryQuantizer, BinaryQuantizationConfig, BinaryVector, BinaryVectorStore};
 pub use query_engine::{QueryEngine, QueryEngineConfig, QueryOptimizer};
 pub use storage::{BasicVectorStore, VectorStore};
 pub use types::*;
