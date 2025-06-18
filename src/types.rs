@@ -849,6 +849,9 @@ pub enum VectorDbError {
     #[error("运行时错误: {0}")]
     RuntimeError(String),
 
+    #[error("认证错误: {0}")]
+    AuthError(String),
+
     #[error("功能未实现: {0}")]
     NotImplemented(String),
 

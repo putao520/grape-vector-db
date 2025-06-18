@@ -2,7 +2,7 @@ use crate::{
     types::*, 
     config::VectorDbConfig, 
     storage::VectorStore, 
-    index::HnswVectorIndex,
+    index::{HnswVectorIndex, VectorIndex},
     metrics::{MetricsCollector, QueryTimer},
     errors::{Result, VectorDbError}
 };
