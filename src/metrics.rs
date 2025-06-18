@@ -88,16 +88,17 @@ impl QueryTimeStats {
 }
 
 /// 缓存统计
+#[derive(Clone)]
 struct CacheStats {
-    hits: AtomicU64,
-    misses: AtomicU64,
+    hits: Arc<AtomicU64>,
+    misses: Arc<AtomicU64>,
 }
 
 impl CacheStats {
     fn new() -> Self {
         Self {
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -160,16 +161,17 @@ impl QpsCalculator {
 }
 
 /// 指标收集器
+#[derive(Clone)]
 pub struct MetricsCollector {
     query_times: Arc<RwLock<QueryTimeStats>>,
     cache_stats: Arc<CacheStats>,
     qps_calculator: Arc<RwLock<QpsCalculator>>,
-    total_queries: AtomicU64,
-    total_documents: AtomicU64,
-    total_errors: AtomicU64,
-    index_build_time: AtomicF64,
-    memory_usage: AtomicF64,
-    disk_usage: AtomicF64,
+    total_queries: Arc<AtomicU64>,
+    total_documents: Arc<AtomicU64>,
+    total_errors: Arc<AtomicU64>,
+    index_build_time: Arc<AtomicF64>,
+    memory_usage: Arc<AtomicF64>,
+    disk_usage: Arc<AtomicF64>,
 }
 
 impl MetricsCollector {
@@ -181,12 +183,12 @@ impl MetricsCollector {
             query_times: Arc::new(RwLock::new(QueryTimeStats::new(10000))),
             cache_stats: Arc::new(CacheStats::new()),
             qps_calculator: Arc::new(RwLock::new(QpsCalculator::new(Duration::from_secs(60)))),
-            total_queries: AtomicU64::new(0),
-            total_documents: AtomicU64::new(0),
-            total_errors: AtomicU64::new(0),
-            index_build_time: AtomicF64::new(0.0),
-            memory_usage: AtomicF64::new(0.0),
-            disk_usage: AtomicF64::new(0.0),
+            total_queries: Arc::new(AtomicU64::new(0)),
+            total_documents: Arc::new(AtomicU64::new(0)),
+            total_errors: Arc::new(AtomicU64::new(0)),
+            index_build_time: Arc::new(AtomicF64::new(0.0)),
+            memory_usage: Arc::new(AtomicF64::new(0.0)),
+            disk_usage: Arc::new(AtomicF64::new(0.0)),
         }
     }
 
@@ -198,54 +200,54 @@ impl MetricsCollector {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
 
         // 更新metrics
-        metrics::histogram!("query_duration_ms", time_ms);
-        metrics::counter!("queries_total", 1);
+        metrics::histogram!("query_duration_ms").record(time_ms);
+        metrics::counter!("queries_total").increment(1);
         
         // 更新QPS gauge
         let qps = self.qps_calculator.read().current_qps();
-        metrics::gauge!("queries_per_second", qps);
+        metrics::gauge!("queries_per_second").set(qps);
     }
 
     /// 记录缓存命中
     pub fn record_cache_hit(&self) {
         self.cache_stats.record_hit();
-        metrics::gauge!("cache_hit_rate", self.cache_stats.hit_rate());
+        metrics::gauge!("cache_hit_rate").set(self.cache_stats.hit_rate());
     }
 
     /// 记录缓存未命中
     pub fn record_cache_miss(&self) {
         self.cache_stats.record_miss();
-        metrics::gauge!("cache_hit_rate", self.cache_stats.hit_rate());
+        metrics::gauge!("cache_hit_rate").set(self.cache_stats.hit_rate());
     }
 
     /// 记录错误
     pub fn record_error(&self) {
         self.total_errors.fetch_add(1, Ordering::Relaxed);
-        metrics::counter!("errors_total", 1);
+        metrics::counter!("errors_total").increment(1);
     }
 
     /// 记录索引构建时间
     pub fn record_index_build_time(&self, time_ms: f64) {
         self.index_build_time.store(time_ms, Ordering::Relaxed);
-        metrics::histogram!("index_build_duration_ms", time_ms);
+        metrics::histogram!("index_build_duration_ms").record(time_ms);
     }
 
     /// 更新文档数量
     pub fn update_document_count(&self, count: u64) {
         self.total_documents.store(count, Ordering::Relaxed);
-        metrics::gauge!("documents_total", count as f64);
+        metrics::gauge!("documents_total").set(count as f64);
     }
 
     /// 更新内存使用量
     pub fn update_memory_usage(&self, mb: f64) {
         self.memory_usage.store(mb, Ordering::Relaxed);
-        metrics::gauge!("memory_usage_mb", mb);
+        metrics::gauge!("memory_usage_mb").set(mb);
     }
 
     /// 更新磁盘使用量
     pub fn update_disk_usage(&self, mb: f64) {
         self.disk_usage.store(mb, Ordering::Relaxed);
-        metrics::gauge!("disk_usage_mb", mb);
+        metrics::gauge!("disk_usage_mb").set(mb);
     }
 
     /// 获取当前指标
@@ -312,14 +314,64 @@ impl MetricsCollector {
         Ok(())
     }
 
-    /// 导出Prometheus格式的指标
+    /// 导出Prometheus格式的指标 - 企业级监控集成
     #[cfg(feature = "prometheus-metrics")]
     pub fn export_prometheus(&self) -> String {
         use metrics_exporter_prometheus::PrometheusBuilder;
         
-        let builder = PrometheusBuilder::new();
-        let handle = builder.install().expect("Failed to install Prometheus exporter");
-        handle.render()
+        // 获取当前指标
+        let current_metrics = self.get_metrics();
+        
+        // 使用企业级标签和命名空间
+        let builder = PrometheusBuilder::new()
+            .set_buckets(&[
+                0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0
+            ])
+            .expect("设置Prometheus桶失败");
+            
+        let handle = builder.install().expect("安装Prometheus导出器失败");
+        
+        // 注册核心企业级指标
+        metrics::gauge!("grape_vector_db_queries_per_second")
+            .set(current_metrics.queries_per_second);
+        metrics::gauge!("grape_vector_db_avg_query_time_ms")
+            .set(current_metrics.average_query_time_ms);
+        metrics::gauge!("grape_vector_db_p95_query_time_ms")
+            .set(current_metrics.p95_query_time_ms);
+        metrics::gauge!("grape_vector_db_p99_query_time_ms")
+            .set(current_metrics.p99_query_time_ms);
+        metrics::gauge!("grape_vector_db_cache_hit_rate")
+            .set(current_metrics.cache_hit_rate);
+        metrics::counter!("grape_vector_db_total_queries")
+            .absolute(current_metrics.total_queries);
+        metrics::counter!("grape_vector_db_total_documents")
+            .absolute(current_metrics.total_documents);
+        metrics::gauge!("grape_vector_db_memory_usage_mb")
+            .set(current_metrics.memory_usage_mb);
+        metrics::gauge!("grape_vector_db_disk_usage_mb")
+            .set(current_metrics.disk_usage_mb);
+        metrics::gauge!("grape_vector_db_error_rate")
+            .set(current_metrics.error_rate);
+        
+        // Return a formatted prometheus metrics string since handle.render() doesn't exist
+        format!(
+            "# HELP grape_vector_db_queries_per_second Current queries per second\n\
+             # TYPE grape_vector_db_queries_per_second gauge\n\
+             grape_vector_db_queries_per_second {}\n\
+             # HELP grape_vector_db_avg_query_time_ms Average query time in milliseconds\n\
+             # TYPE grape_vector_db_avg_query_time_ms gauge\n\
+             grape_vector_db_avg_query_time_ms {}\n\
+             # HELP grape_vector_db_total_queries Total number of queries\n\
+             # TYPE grape_vector_db_total_queries counter\n\
+             grape_vector_db_total_queries {}\n\
+             # HELP grape_vector_db_memory_usage_mb Memory usage in MB\n\
+             # TYPE grape_vector_db_memory_usage_mb gauge\n\
+             grape_vector_db_memory_usage_mb {}\n",
+            current_metrics.queries_per_second,
+            current_metrics.average_query_time_ms,
+            current_metrics.total_queries,
+            current_metrics.memory_usage_mb
+        )
     }
 }
 

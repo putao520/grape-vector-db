@@ -568,6 +568,22 @@ pub struct ClusterConfig {
     pub max_nodes: usize,
 }
 
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            cluster_id: "grape-cluster-default".to_string(),
+            cluster_token: "default-token".to_string(),
+            nodes: Vec::new(),
+            shard_count: 16,
+            replica_count: 3,
+            consistency_level: ConsistencyLevel::Strong,
+            heartbeat_interval_secs: 5,
+            node_timeout_secs: 30,
+            max_nodes: 100,
+        }
+    }
+}
+
 /// 节点负载信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeLoad {
@@ -738,6 +754,19 @@ pub struct ClusterStats {
     pub avg_load: NodeLoad,
 }
 
+impl Default for ClusterStats {
+    fn default() -> Self {
+        Self {
+            total_nodes: 0,
+            active_nodes: 0,
+            total_shards: 0,
+            total_vectors: 0,
+            total_storage_gb: 0.0,
+            avg_load: NodeLoad::default(),
+        }
+    }
+}
+
 /// 集群信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterInfo {
@@ -755,6 +784,19 @@ pub struct ClusterInfo {
     pub version: u64,
 }
 
+impl Default for ClusterInfo {
+    fn default() -> Self {
+        Self {
+            config: ClusterConfig::default(),
+            nodes: HashMap::new(),
+            leader_id: None,
+            shard_map: ShardMap::default(),
+            stats: ClusterStats::default(),
+            version: 0,
+        }
+    }
+}
+
 /// 分片映射
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShardMap {
@@ -762,6 +804,15 @@ pub struct ShardMap {
     pub shards: HashMap<u32, ShardInfo>,
     /// 映射版本
     pub version: u64,
+}
+
+impl Default for ShardMap {
+    fn default() -> Self {
+        Self {
+            shards: HashMap::new(),
+            version: 0,
+        }
+    }
 }
 
 /// 心跳消息
@@ -815,6 +866,9 @@ pub enum QueryResponse {
 pub enum VectorDbError {
     #[error("存储错误: {0}")]
     StorageError(String),
+    
+    #[error("存储错误: {0}")]
+    Storage(String), // Alternative name for compatibility
 
     #[error("序列化错误: {0}")]
     SerializationError(String),

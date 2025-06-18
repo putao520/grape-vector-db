@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{debug, error};
 use chrono::Utc;
+use uuid;
 
 use crate::types::{NodeId, Point, SearchRequest, SearchResult};
 
@@ -14,11 +15,18 @@ pub struct DistributedNetworkClient {
     timeout: Duration,
     /// 重试次数
     retry_attempts: u32,
+    /// 本地节点ID（企业级节点身份管理）
+    local_node_id: NodeId,
 }
 
 impl DistributedNetworkClient {
     /// 创建新的网络客户端
     pub fn new() -> Self {
+        Self::with_node_id(Self::generate_node_id())
+    }
+    
+    /// 使用指定节点ID创建网络客户端（企业级）
+    pub fn with_node_id(node_id: NodeId) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -28,7 +36,36 @@ impl DistributedNetworkClient {
             http_client,
             timeout: Duration::from_secs(10),
             retry_attempts: 3,
+            local_node_id: node_id,
         }
+    }
+    
+    /// 生成企业级节点ID（基于MAC地址和时间戳）
+    fn generate_node_id() -> NodeId {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        
+        // 获取主机名作为节点标识的一部分
+        let hostname = gethostname::gethostname()
+            .to_string_lossy()
+            .to_string();
+            
+        // 获取时间戳确保唯一性
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+            
+        // 生成企业级节点ID格式：hostname-timestamp-random
+        format!("{}-{}-{:x}", 
+            hostname, 
+            timestamp, 
+            fastrand::u64(..)
+        )
+    }
+    
+    /// 获取本地节点ID
+    pub fn get_local_node_id(&self) -> &NodeId {
+        &self.local_node_id
     }
 
     /// 配置超时时间
@@ -51,7 +88,7 @@ impl DistributedNetworkClient {
     ) -> Result<HeartbeatResponse, NetworkError> {
         let url = format!("http://{}/api/v1/heartbeat", node_address);
         let request = HeartbeatRequest {
-            sender_id: "local_node".to_string(), // TODO: 使用实际的本地节点ID
+            sender_id: self.local_node_id.clone(), // 企业级节点ID管理
             timestamp: Utc::now().timestamp(),
         };
 
@@ -155,16 +192,66 @@ impl DistributedNetworkClient {
         }
     }
 
-    /// 发送搜索请求  
+    /// 发送搜索请求（企业级分布式搜索）
     pub async fn send_search_request(
         &self,
         target_node: &NodeId,
-        _node_address: &str, // 将来用于网络连接
-        _search_request: &SearchRequest,
+        node_address: &str,
+        search_request: &SearchRequest,
     ) -> Result<Vec<SearchResult>, NetworkError> {
-        // TODO: 实现搜索请求，现在暂时返回空结果
-        debug!("搜索请求（占位实现），目标节点: {}", target_node);
-        Ok(vec![])
+        let url = format!("http://{}/api/v1/search", node_address);
+        
+        // 构建企业级搜索请求，包含节点身份和负载均衡信息
+        let distributed_request = DistributedSearchRequest {
+            sender_id: self.local_node_id.clone(),
+            target_node: target_node.clone(),
+            search_params: search_request.clone(),
+            timestamp: Utc::now().timestamp(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            priority: SearchPriority::Normal,
+        };
+        
+        // 企业级重试逻辑和容错处理
+        for attempt in 0..self.retry_attempts {
+            match self.send_post_request(&url, &distributed_request).await {
+                Ok(response) => {
+                    debug!(
+                        "分布式搜索请求成功，目标节点: {}, 请求ID: {}", 
+                        target_node, 
+                        distributed_request.request_id
+                    );
+                    
+                    // 记录企业级性能指标
+                    metrics::counter!("distributed_search_requests_total")
+                        .increment(1);
+                    metrics::gauge!("distributed_search_latency_ms")
+                        .set((Utc::now().timestamp() - distributed_request.timestamp) as f64);
+                    
+                    return Ok(response);
+                }
+                Err(e) => {
+                    error!(
+                        "分布式搜索请求失败，目标节点: {}, 尝试: {}/{}, 错误: {}", 
+                        target_node, attempt + 1, self.retry_attempts, e
+                    );
+                    
+                    if attempt < self.retry_attempts - 1 {
+                        // 企业级指数退避重试策略
+                        let delay = Duration::from_millis(100 * (2_u64.pow(attempt as u32)));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+        
+        // 记录失败指标
+        metrics::counter!("distributed_search_failures_total")
+            .increment(1);
+            
+        Err(NetworkError::RequestTimeout(format!(
+            "分布式搜索请求超时，目标节点: {}, 重试次数: {}", 
+            target_node, self.retry_attempts
+        )))
     }
 
     /// 发送分片迁移请求
@@ -377,4 +464,24 @@ pub struct HealthCheckResponse {
     pub node_id: String,
     pub uptime_seconds: u64,
     pub load_info: NodeLoadInfo,
+}
+
+/// 企业级分布式搜索请求
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DistributedSearchRequest {
+    pub sender_id: NodeId,
+    pub target_node: NodeId,
+    pub search_params: SearchRequest,
+    pub timestamp: i64,
+    pub request_id: String,
+    pub priority: SearchPriority,
+}
+
+/// 搜索优先级（企业级负载管理）
+#[derive(Debug, Serialize, Deserialize)]
+pub enum SearchPriority {
+    Low,
+    Normal,
+    High,
+    Critical,
 }

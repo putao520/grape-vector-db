@@ -66,8 +66,8 @@ ndarray = "0.16"        # 多维数组
 metrics = "0.23"
 atomic_float = "1.0"
 
-# 暂时移除prometheus导出器，避免复杂依赖
-# metrics-exporter-prometheus = "0.15"
+# Prometheus telemetry支持 - 企业级监控
+metrics-exporter-prometheus = { version = "0.15", optional = true }
 
 # 配置管理
 config = "0.14"
@@ -95,6 +95,9 @@ smallvec = "1.0"        # 小向量优化
 # 异步工具
 futures = "0.3"
 
+# 企业级节点识别
+gethostname = "0.5"
+
 # 随机数生成
 rand = "0.8"
 
@@ -115,3 +118,8 @@ sqlparser = "0.49"        # SQL解析器
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.0"
 proptest = "1.0"
+
+# 企业级特性标志
+[features]
+default = ["prometheus-metrics"]
+prometheus-metrics = ["metrics-exporter-prometheus"]
