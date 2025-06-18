@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+use chrono::Utc;
 
 use crate::advanced_storage::AdvancedStorage;
 
@@ -102,7 +103,7 @@ impl Default for ShardStats {
             read_qps: 0.0,
             write_qps: 0.0,
             avg_latency_ms: 0.0,
-            last_updated: chrono::Utc::now().timestamp(),
+            last_updated: Utc::now().timestamp(),
         }
     }
 }
@@ -365,6 +366,9 @@ impl ShardManager {
 
             shard_map.insert(shard_id, shard_info);
         }
+
+        // 释放写锁
+        drop(shard_map);
 
         // 创建本地分片
         self.create_local_shards().await?;
@@ -787,7 +791,7 @@ impl ShardManager {
                 (local_shard.stats.vector_count as i64 + vector_delta).max(0) as u64;
             local_shard.stats.storage_size =
                 (local_shard.stats.storage_size as i64 + size_delta).max(0) as u64;
-            local_shard.stats.last_updated = chrono::Utc::now().timestamp();
+            local_shard.stats.last_updated = Utc::now().timestamp();
         }
 
         // 分片映射中的 ShardInfo 不包含统计信息，统计信息保存在 LocalShard 中
@@ -873,7 +877,7 @@ impl ShardManager {
                 "vectors": [], // 实际实现中这里应该包含所有向量数据
                 "metadata": {
                     "vector_count": 0,
-                    "timestamp": chrono::Utc::now().timestamp()
+                    "timestamp": Utc::now().timestamp()
                 }
             });
 
@@ -980,7 +984,7 @@ impl ShardManager {
             let mut health_status = ShardHealthStatus {
                 shard_id,
                 is_healthy: true,
-                last_check: chrono::Utc::now().timestamp(),
+                last_check: Utc::now().timestamp(),
                 issues: Vec::new(),
                 metrics: HashMap::new(),
             };
