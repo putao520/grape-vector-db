@@ -118,6 +118,25 @@ impl HnswVectorIndex {
         }
     }
 
+    /// 获取所有向量数据（用于持久化）
+    pub fn get_all_vectors(&self) -> Result<Vec<(String, Vec<f32>)>, VectorDbError> {
+        let mut result = Vec::with_capacity(self.id_to_index.len());
+        
+        for (id, &index) in &self.id_to_index {
+            if let Some(vector_point) = self.vectors.get(index) {
+                result.push((id.clone(), vector_point.0.clone()));
+            } else {
+                return Err(VectorDbError::Storage(
+                    format!("索引映射错误: ID {} 对应的向量索引 {} 超出范围", id, index)
+                ));
+            }
+        }
+        
+        // 按ID排序以确保一致性
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(result)
+    }
+
     /// 构建索引
     pub fn build_index(&mut self) -> Result<(), VectorDbError> {
         if self.vectors.is_empty() {

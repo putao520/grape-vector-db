@@ -9,6 +9,23 @@ use crate::{
 use std::sync::Arc;
 use parking_lot::{RwLock, Mutex};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+/// 索引持久化数据结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexPersistenceData {
+    metadata: IndexMetadata,
+    vectors: Vec<(String, Vec<f32>)>,
+}
+
+/// 索引元数据
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IndexMetadata {
+    dimension: usize,
+    total_points: usize,
+    created_at: chrono::DateTime<chrono::Utc>,
+    config: crate::config::HnswConfig,
+}
 
 /// 查询引擎
 pub struct QueryEngine {
@@ -256,14 +273,125 @@ impl QueryEngine {
     }
 
     /// 保存索引到文件
-    pub async fn save_index(&self, _path: &std::path::Path) -> Result<()> {
-        // TODO: Implement index persistence
+    pub async fn save_index(&self, path: &std::path::Path) -> Result<()> {
+        use std::fs;
+        use std::io::Write;
+        
+        // 创建目录结构
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| VectorDbError::Storage(format!("创建索引目录失败: {}", e)))?;
+        }
+        
+        // 获取索引数据
+        let index_data = {
+            let index = self.hnsw_index.lock();
+            let vectors = index.get_all_vectors()?;
+            let metadata = IndexMetadata {
+                dimension: self.config.vector_dimension,
+                total_points: vectors.len(),
+                created_at: chrono::Utc::now(),
+                config: self.config.hnsw.clone(),
+            };
+            
+            IndexPersistenceData {
+                metadata,
+                vectors,
+            }
+        };
+        
+        // 序列化并压缩数据
+        let serialized = postcard::to_allocvec(&index_data)
+            .map_err(|e| VectorDbError::Storage(format!("索引序列化失败: {}", e)))?;
+            
+        let compressed = {
+            use flate2::Compression;
+            use flate2::write::GzEncoder;
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&serialized)
+                .map_err(|e| VectorDbError::Storage(format!("索引压缩失败: {}", e)))?;
+            encoder.finish()
+                .map_err(|e| VectorDbError::Storage(format!("索引压缩完成失败: {}", e)))?
+        };
+        
+        // 写入文件
+        fs::write(path, &compressed)
+            .map_err(|e| VectorDbError::Storage(format!("索引文件写入失败: {}", e)))?;
+            
+        // 记录指标
+        self.metrics.record_index_save(compressed.len(), path).await;
+        
+        tracing::info!("索引已保存到 {:?}, 压缩大小: {} bytes", path, compressed.len());
         Ok(())
     }
 
     /// 从文件加载索引
-    pub async fn load_index(&self, _path: &std::path::Path) -> Result<()> {
-        // TODO: Implement index loading
+    pub async fn load_index(&self, path: &std::path::Path) -> Result<()> {
+        use std::fs;
+        use std::io::Read;
+        
+        // 检查文件是否存在
+        if !path.exists() {
+            return Err(VectorDbError::Storage(
+                format!("索引文件不存在: {:?}", path)
+            ));
+        }
+        
+        // 读取文件
+        let compressed_data = fs::read(path)
+            .map_err(|e| VectorDbError::Storage(format!("读取索引文件失败: {}", e)))?;
+            
+        // 解压缩数据
+        let decompressed = {
+            use flate2::read::GzDecoder;
+            let mut decoder = GzDecoder::new(&compressed_data[..]);
+            let mut buffer = Vec::new();
+            decoder.read_to_end(&mut buffer)
+                .map_err(|e| VectorDbError::Storage(format!("索引解压失败: {}", e)))?;
+            buffer
+        };
+        
+        // 反序列化数据
+        let index_data: IndexPersistenceData = postcard::from_bytes(&decompressed)
+            .map_err(|e| VectorDbError::Storage(format!("索引反序列化失败: {}", e)))?;
+            
+        // 验证元数据兼容性
+        if index_data.metadata.dimension != self.config.vector_dimension {
+            return Err(VectorDbError::DimensionMismatch {
+                expected: self.config.vector_dimension,
+                actual: index_data.metadata.dimension,
+            });
+        }
+        
+        // 重建索引
+        {
+            let mut index = self.hnsw_index.lock();
+            
+            // 清空现有索引
+            *index = HnswVectorIndex::with_config(
+                self.config.hnsw.clone(),
+                self.config.vector_dimension,
+            );
+            
+            // 添加所有向量
+            for (id, vector) in index_data.vectors {
+                index.add_vector(id, vector)?;
+            }
+        }
+        
+        // 记录指标
+        self.metrics.record_index_load(
+            compressed_data.len(), 
+            index_data.metadata.total_points,
+            path
+        ).await;
+        
+        tracing::info!(
+            "索引已从 {:?} 加载, 向量数量: {}, 维度: {}", 
+            path, 
+            index_data.metadata.total_points,
+            index_data.metadata.dimension
+        );
         Ok(())
     }
 }
@@ -287,7 +415,8 @@ mod tests {
     #[tokio::test]
     async fn test_query_engine() {
         let temp_dir = TempDir::new().unwrap();
-        let config = VectorDbConfig::default();
+        let mut config = VectorDbConfig::default();
+        config.vector_dimension = 3; // Use smaller dimension for testing
         let metrics = Arc::new(MetricsCollector::new());
         
         let engine = QueryEngine::new(&config, metrics).unwrap();
@@ -320,8 +449,9 @@ mod tests {
             version: Some(doc.version.clone()),
             doc_type: Some(doc.doc_type.clone()),
             vector: doc.vector.clone(),
-            sparse_representation: doc.sparse_representation.clone(),
             metadata: doc.metadata.clone(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         store.insert_document(document).await.unwrap();

@@ -514,7 +514,7 @@ impl<T> ResourcePool<T> {
 
     /// 从池中获取资源
     pub async fn acquire(&self) -> ResilienceResult<PooledResource<T>> {
-        let permit = self.semaphore.acquire().await
+        let _permit = self.semaphore.acquire().await
             .map_err(|_| ResilienceError::ResourcePoolExhausted { 
                 resource: self.name.clone() 
             })?;
@@ -527,7 +527,7 @@ impl<T> ResourcePool<T> {
         Ok(PooledResource {
             resource,
             pool: self.resources.clone(),
-            // _permit: permit, // TODO: Fix lifetime issue
+            semaphore: self.semaphore.clone(),
         })
     }
 
@@ -555,7 +555,7 @@ impl<T> ResourcePool<T> {
 pub struct PooledResource<T> {
     resource: Option<T>,
     pool: Arc<Mutex<Vec<T>>>,
-    // _permit: tokio::sync::SemaphorePermit<'static>, // TODO: Fix lifetime issue
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl<T> PooledResource<T> {
@@ -581,6 +581,8 @@ impl<T> Drop for PooledResource<T> {
             let mut pool = self.pool.lock();
             pool.push(resource);
         }
+        // 释放信号量许可，允许其他请求获取资源
+        self.semaphore.add_permits(1);
     }
 }
 
