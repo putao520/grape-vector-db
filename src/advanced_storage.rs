@@ -795,7 +795,7 @@ impl crate::storage::VectorStore for AdvancedStorage {
     }
 
     async fn count_documents(&self) -> crate::errors::Result<usize> {
-        Ok(self.get_stats().total_vectors as usize)
+        Ok(self.get_stats().estimated_keys as usize)
     }
 
     async fn list_document_ids(&self, _offset: usize, _limit: usize) -> crate::errors::Result<Vec<String>> {
@@ -812,7 +812,12 @@ impl crate::storage::VectorStore for AdvancedStorage {
     async fn get_document_metadata(&self, id: &str) -> crate::errors::Result<Option<HashMap<String, String>>> {
         if let Some(point) = self.get_vector(id)
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
-            Ok(Some(point.payload))
+            // Convert HashMap<String, Value> to HashMap<String, String>
+            let string_metadata: HashMap<String, String> = point.payload
+                .into_iter()
+                .map(|(k, v)| (k, v.to_string()))
+                .collect();
+            Ok(Some(string_metadata))
         } else {
             Ok(None)
         }
@@ -821,7 +826,12 @@ impl crate::storage::VectorStore for AdvancedStorage {
     async fn update_document_metadata(&mut self, id: &str, metadata: HashMap<String, String>) -> crate::errors::Result<bool> {
         if let Some(mut point) = self.get_vector(id)
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
-            point.payload = metadata;
+            // Convert HashMap<String, String> to HashMap<String, Value>
+            let value_metadata: HashMap<String, serde_json::Value> = metadata
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            point.payload = value_metadata;
             self.store_vector(&point)
                 .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
             Ok(true)

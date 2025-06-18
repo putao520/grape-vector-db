@@ -18,7 +18,8 @@ use crate::{
     errors::{Result, VectorDbError},
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use serde::{Serialize, Deserialize};
 
@@ -154,7 +155,7 @@ impl FusionModel for StatisticalFusionModel {
 /// 混合搜索引擎
 pub struct HybridSearchEngine {
     /// 密集向量搜索引擎
-    dense_engine: Arc<HnswVectorIndex>,
+    dense_engine: Arc<Mutex<HnswVectorIndex>>,
     /// 稀疏向量搜索引擎
     sparse_engine: Arc<SparseIndex>,
     /// 文本分词器
@@ -174,7 +175,7 @@ pub struct HybridSearchEngine {
 impl HybridSearchEngine {
     /// 创建新的混合搜索引擎
     pub fn new(
-        dense_engine: Arc<HnswVectorIndex>,
+        dense_engine: Arc<Mutex<HnswVectorIndex>>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
     ) -> Self {
@@ -192,7 +193,7 @@ impl HybridSearchEngine {
 
     /// 创建带有学习式融合模型的搜索引擎
     pub fn with_fusion_model(
-        dense_engine: Arc<HnswVectorIndex>,
+        dense_engine: Arc<Mutex<HnswVectorIndex>>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
         fusion_model: Arc<Mutex<dyn FusionModel>>,
@@ -216,7 +217,7 @@ impl HybridSearchEngine {
         record: &DocumentRecord
     ) -> Result<()> {
         // 添加到密集向量索引
-        self.dense_engine.add_vector(record.id.clone(), record.embedding.clone())?;
+        self.dense_engine.lock().add_vector(record.id.clone(), record.embedding.clone())?;
 
         // 如果有稀疏向量表示，添加到稀疏索引
         if let Some(sparse_repr) = &record.sparse_representation {
@@ -270,7 +271,7 @@ impl HybridSearchEngine {
 
         // 1. 密集向量搜索
         let dense_results = if let Some(dense_vector) = &request.dense_vector {
-            let results = self.dense_engine.search(dense_vector, request.limit * 2)?;
+            let results = self.dense_engine.lock().search(dense_vector, request.limit * 2)?;
             results.into_iter()
                 .map(|(id, score)| (id, score))
                 .collect::<Vec<_>>()
@@ -316,15 +317,17 @@ impl HybridSearchEngine {
         // 5. 获取文档详情并构建最终结果
         for (doc_id, score, breakdown) in fused_results.into_iter().take(request.limit) {
             if let Some(doc) = store.get_document(&doc_id).await? {
+                let snippets = if let Some(query) = &request.text_query {
+                    Some(vec![self.extract_snippet(&doc.content, Some(query))])
+                } else {
+                    None
+                };
+                
                 let result = SearchResult {
-                    document_id: doc.id.clone(),
-                    title: doc.title.clone(),
-                    content_snippet: self.extract_snippet(&doc.content, request.text_query.as_deref()),
-                    similarity_score: score,
-                    package_name: doc.package_name.clone(),
-                    doc_type: doc.doc_type.clone(),
-                    metadata: doc.metadata,
-                    score_breakdown: Some(breakdown),
+                    document: doc,
+                    score,
+                    relevance_score: Some(breakdown.final_score),
+                    matched_snippets: snippets,
                 };
                 search_results.push(result);
             }
@@ -598,13 +601,14 @@ impl HybridSearchEngine {
         let max_docs = 10000; // 最多处理10000个文档
         
         while offset < max_docs {
-            let docs = store.list_documents(offset, page_size).await?;
+            let doc_ids = store.list_document_ids(offset, page_size).await?;
             
-            if docs.is_empty() {
+            if doc_ids.is_empty() {
                 break; // 没有更多文档了
             }
             
-            for doc in docs {
+            for doc_id in doc_ids {
+                if let Some(doc) = store.get_document(&doc_id).await? {
                 let content_lower = doc.content.to_lowercase();
                 let title_lower = doc.title.to_lowercase();
                 
@@ -622,6 +626,7 @@ impl HybridSearchEngine {
                 
                 if score > 0.0 {
                     all_results.push((doc.id, score));
+                }
                 }
             }
             
@@ -665,7 +670,7 @@ impl HybridSearchEngine {
 
     /// 删除文档
     pub async fn remove_document(&self, document_id: &str) -> Result<bool> {
-        let dense_removed = self.dense_engine.remove_point(document_id)?;
+        let dense_removed = self.dense_engine.lock().remove_vector(document_id)?;
         let sparse_removed = self.sparse_engine.remove_document(document_id)?;
         
         Ok(dense_removed || sparse_removed)
@@ -924,14 +929,14 @@ impl HybridSearchEngine {
     /// 获取搜索引擎统计信息
     pub fn get_stats(&self) -> crate::types::DatabaseStats {
         let sparse_stats = self.sparse_engine.get_stats();
-        let dense_stats = self.dense_engine.get_stats();
+        let dense_stats = self.dense_engine.lock().get_stats();
         
         crate::types::DatabaseStats {
             document_count: sparse_stats.total_documents,
-            dense_vector_count: dense_stats.point_count,
+            dense_vector_count: dense_stats.vector_count,
             sparse_vector_count: sparse_stats.total_documents,
-            memory_usage_mb: dense_stats.memory_usage_mb + self.sparse_engine.get_memory_usage_mb(),
-            dense_index_size_mb: dense_stats.memory_usage_mb,
+            memory_usage_mb: (dense_stats.memory_usage + self.sparse_engine.get_memory_usage_mb() * 1024 * 1024) / (1024 * 1024),
+            dense_index_size_mb: dense_stats.memory_usage / (1024 * 1024),
             sparse_index_size_mb: self.sparse_engine.get_memory_usage_mb(),
             cache_hit_rate: self.calculate_cache_hit_rate(),
             bm25_stats: Some(sparse_stats),
@@ -951,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_rrf_fusion() {
-        let dense_engine = Arc::new(HnswVectorIndex::new());
+        let dense_engine = Arc::new(Mutex::new(HnswVectorIndex::new()));
         let sparse_engine = Arc::new(SparseIndex::new(BM25Parameters::default()));
         
         let engine = HybridSearchEngine::new(

@@ -179,7 +179,7 @@ impl LifecycleManager {
 /// 内嵌式向量数据库
 pub struct EmbeddedVectorDB {
     /// 高级存储引擎
-    storage: Arc<AdvancedStorage>,
+    storage: Arc<Mutex<AdvancedStorage>>,
     /// 查询引擎
     query_engine: Arc<QueryEngine>,
     /// 配置信息
@@ -224,7 +224,7 @@ impl EmbeddedVectorDB {
         let metrics = Arc::new(MetricsCollector::new());
         
         // 2. 初始化存储引擎
-        let storage = Arc::new(AdvancedStorage::new(config.storage.clone())?);
+        let storage = Arc::new(Mutex::new(AdvancedStorage::new(config.storage.clone())?));
         
         // 3. 初始化查询引擎
         // 创建完整的企业级配置用于QueryEngine
@@ -338,7 +338,7 @@ impl EmbeddedVectorDB {
     
     /// 获取数据库统计信息
     pub fn stats(&self) -> DatabaseStats {
-        let storage_stats = self.storage.get_stats();
+        let storage_stats = self.storage.lock().get_stats();
         
         DatabaseStats {
             total_vectors: storage_stats.estimated_keys as usize,
@@ -422,7 +422,7 @@ impl EmbeddedVectorDB {
         let start = Instant::now();
         
         // 1. 预热存储引擎缓存
-        self.storage.warmup_cache().await?;
+        self.storage.lock().warmup_cache().await?;
         
         // 2. 预加载索引（如果存在）
         if self.config.enable_warmup {
@@ -459,10 +459,12 @@ impl EmbeddedVectorDB {
         // 执行向量搜索
         let results = if !request.vector.is_empty() {
             // 向量搜索 - 需要传递storage参数
-            self.query_engine.vector_search(&*self.storage, &request.vector, request.limit).await?
+            let storage = self.storage.lock();
+            self.query_engine.vector_search(&*storage, &request.vector, request.limit).await?
         } else if let Some(ref query_text) = request.query {
             // 文本搜索 (将转换为向量搜索)
-            self.query_engine.text_search(&*self.storage, query_text, request.limit).await?
+            let storage = self.storage.lock();
+            self.query_engine.text_search(&*storage, query_text, request.limit).await?
         } else {
             return Err(VectorDbError::Other("Either vector or query must be provided".into()));
         };
@@ -483,7 +485,7 @@ impl EmbeddedVectorDB {
     /// 异步插入
     async fn upsert_async(&self, points: Vec<Point>) -> Result<()> {
         // 批量存储向量
-        self.storage.batch_store_vectors(points).await?;
+        self.storage.lock().batch_store_vectors(points).await?;
         Ok(())
     }
     
@@ -502,7 +504,7 @@ impl EmbeddedVectorDB {
                     if let Condition::Equals { field, value } = condition {
                         if field == "id" {
                             if let Some(id_str) = value.as_str() {
-                                if self.storage.delete_document(id_str).await? {
+                                if self.storage.lock().delete_document(id_str).await? {
                                     deleted_count += 1;
                                 }
                             }
@@ -516,7 +518,7 @@ impl EmbeddedVectorDB {
                     if let Condition::Equals { field, value } = condition {
                         if field == "id" {
                             if let Some(id_str) = value.as_str() {
-                                if self.storage.delete_document(id_str).await? {
+                                if self.storage.lock().delete_document(id_str).await? {
                                     deleted_count += 1;
                                 }
                             }
@@ -549,10 +551,10 @@ impl EmbeddedVectorDB {
         self.wait_for_operations().await?;
         
         // 2. 刷新缓存到磁盘
-        self.storage.flush().await?;
+        self.storage.lock().flush().await?;
         
         // 3. 同步数据
-        self.storage.sync().await?;
+        self.storage.lock().sync().await?;
         
         // 4. 导出最终指标
         if let Err(e) = self.metrics.export_final_stats() {
@@ -603,11 +605,10 @@ impl EmbeddedVectorDB {
         }
         
         // 2. 检查查询引擎是否有活跃查询
-        if let Some(query_stats) = self.query_engine.get_current_stats() {
-            if query_stats.active_queries > 0 {
-                tracing::debug!("检测到 {} 个活跃查询", query_stats.active_queries);
-                return true;
-            }
+        let query_stats = self.query_engine.get_index_stats();
+        if query_stats.vector_count > 0 {
+            tracing::debug!("检测到 {} 个向量在索引中", query_stats.vector_count);
+            return true;
         }
         
         // 3. 检查存储引擎是否有未完成的写操作
