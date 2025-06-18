@@ -20,7 +20,7 @@ pub struct QueryEngine {
 impl QueryEngine {
     pub fn new(config: &VectorDbConfig, metrics: Arc<MetricsCollector>) -> Result<Self> {
         // 创建HNSW索引
-        let hnsw_index = Arc::new(HnswVectorIndex::new(
+        let hnsw_index = Arc::new(HnswVectorIndex::with_config(
             config.hnsw.clone(),
             config.vector_dimension,
         ));
@@ -69,7 +69,7 @@ impl QueryEngine {
         let _timer = QueryTimer::new(self.metrics.clone());
 
         let mut vector_results = HashMap::new();
-        let mut text_results = HashMap::new();
+        let mut text_results_map = HashMap::new();
 
         // 向量搜索
         if let Some(vector) = query_vector {
@@ -85,7 +85,6 @@ impl QueryEngine {
         if let Some(text) = query_text {
             let text_lower = text.to_lowercase();
             let mut text_results = Vec::new();
-            let mut text_results_map = HashMap::new();
             let page_size = 500;
             let mut offset = 0;
             let max_docs = 5000; // 限制最大搜索文档数
@@ -125,18 +124,9 @@ impl QueryEngine {
             // 对文本搜索结果进行排序和权重计算
             text_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (i, (doc_id, score)) in text_results.iter().enumerate() {
-
-                    break;
-                }
                 let weighted_score = score * text_weight * (1.0 - i as f32 / text_results.len().max(1) as f32);
                 text_results_map.insert(doc_id.clone(), weighted_score);
             }
-            
-            // 按分数排序并返回前N个结果
-            found_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-            found_results.truncate(limit);
-            
-            return Ok(found_results);
         }
 
         // 合并结果
@@ -258,7 +248,7 @@ impl QueryEngine {
 
     /// 获取索引统计信息
     pub fn get_index_stats(&self) -> IndexStats {
-        let hnsw_stats = self.hnsw_index.stats();
+        let hnsw_stats = self.hnsw_index.get_stats();
         IndexStats {
             point_count: hnsw_stats.point_count,
             dimension: hnsw_stats.dimension,

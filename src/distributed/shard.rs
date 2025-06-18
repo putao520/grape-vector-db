@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use chrono::Utc;
@@ -12,6 +12,40 @@ use crate::advanced_storage::AdvancedStorage;
 
 use crate::types::{NodeId, Point, ShardInfo, ShardState};
 use crate::distributed::network_client::{DistributedNetworkClient, NetworkError};
+
+/// 缓存统计信息
+#[derive(Debug, Clone, Default)]
+struct CacheStats {
+    /// 缓存命中次数
+    hits: u64,
+    /// 缓存未命中次数
+    misses: u64,
+    /// 总请求次数
+    total_requests: u64,
+}
+
+impl CacheStats {
+    /// 记录缓存命中
+    fn record_hit(&mut self) {
+        self.hits += 1;
+        self.total_requests += 1;
+    }
+    
+    /// 记录缓存未命中
+    fn record_miss(&mut self) {
+        self.misses += 1;
+        self.total_requests += 1;
+    }
+    
+    /// 计算命中率
+    fn hit_ratio(&self) -> f64 {
+        if self.total_requests == 0 {
+            0.0
+        } else {
+            self.hits as f64 / self.total_requests as f64
+        }
+    }
+}
 
 /// 分片管理器
 pub struct ShardManager {
@@ -29,6 +63,12 @@ pub struct ShardManager {
     hash_ring: Arc<RwLock<ConsistentHashRing>>,
     /// 网络客户端
     network_client: DistributedNetworkClient,
+    /// 路由缓存
+    routing_cache: Arc<RwLock<HashMap<String, (u32, Instant)>>>, // key -> (shard_id, timestamp)
+    /// 缓存统计
+    cache_stats: Arc<RwLock<CacheStats>>,
+    /// 节点地址映射 (NodeId -> 网络地址)
+    node_addresses: Arc<RwLock<HashMap<NodeId, String>>>,
 }
 
 /// 分片配置
@@ -136,6 +176,8 @@ pub struct ConsistentHashRing {
     routing_cache: HashMap<String, NodeId>,
     /// 缓存最大大小
     cache_max_size: usize,
+    /// 缓存统计
+    cache_stats: CacheStats,
 }
 
 impl ConsistentHashRing {
@@ -148,6 +190,7 @@ impl ConsistentHashRing {
             virtual_node_count,
             routing_cache: HashMap::new(),
             cache_max_size: 10000, // 缓存最多1万个路由记录
+            cache_stats: CacheStats::default(),
         }
     }
 
@@ -201,8 +244,11 @@ impl ConsistentHashRing {
         // 首先检查缓存
         if let Some(cached_node) = self.routing_cache.get(key) {
             debug!("缓存命中: {} -> {}", key, cached_node);
+            self.cache_stats.record_hit();
             return Some(cached_node.clone());
         }
+
+        self.cache_stats.record_miss();
 
         if self.sorted_hashes.is_empty() {
             return None;
@@ -284,9 +330,22 @@ impl ConsistentHashRing {
         stats.insert(
             "cache_hit_ratio".to_string(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(0.85).unwrap_or_else(|| serde_json::Number::from(85)),
+                serde_json::Number::from_f64(self.cache_stats.hit_ratio())
+                    .unwrap_or_else(|| serde_json::Number::from(0)),
             ),
-        ); // 简化的缓存命中率
+        );
+        stats.insert(
+            "cache_hits".to_string(),
+            serde_json::Value::Number(self.cache_stats.hits.into()),
+        );
+        stats.insert(
+            "cache_misses".to_string(),
+            serde_json::Value::Number(self.cache_stats.misses.into()),
+        );
+        stats.insert(
+            "cache_total_requests".to_string(),
+            serde_json::Value::Number(self.cache_stats.total_requests.into()),
+        );
 
         stats
     }
@@ -323,6 +382,41 @@ impl ShardManager {
             node_id,
             hash_ring: Arc::new(RwLock::new(ConsistentHashRing::new(100))),
             network_client: DistributedNetworkClient::new(),
+            routing_cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_stats: Arc::new(RwLock::new(CacheStats::default())),
+            node_addresses: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// 注册节点地址
+    pub async fn register_node_address(&self, node_id: NodeId, address: String) {
+        let mut addresses = self.node_addresses.write().await;
+        addresses.insert(node_id.clone(), address.clone());
+        info!("注册节点地址: {} -> {}", node_id, address);
+    }
+
+    /// 获取节点地址
+    async fn get_node_address(&self, node_id: &NodeId) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let addresses = self.node_addresses.read().await;
+        
+        if let Some(address) = addresses.get(node_id) {
+            Ok(address.clone())
+        } else {
+            // 尝试从环境变量或配置中解析地址
+            let fallback_address = std::env::var(format!("NODE_{}_ADDRESS", node_id))
+                .unwrap_or_else(|_| format!("{}:8080", node_id)); // 最后的默认值
+            
+            warn!("节点 {} 地址未注册，使用默认地址: {}", node_id, fallback_address);
+            Ok(fallback_address)
+        }
+    }
+
+    /// 批量注册节点地址
+    pub async fn register_cluster_addresses(&self, addresses: HashMap<NodeId, String>) {
+        let mut node_addresses = self.node_addresses.write().await;
+        for (node_id, address) in addresses {
+            node_addresses.insert(node_id.clone(), address.clone());
+            info!("批量注册节点地址: {} -> {}", node_id, address);
         }
     }
 
@@ -607,7 +701,7 @@ impl ShardManager {
         );
 
         // 使用网络客户端发送向量插入请求
-        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        let node_address = self.get_node_address(&target_node).await?;
         
         match self.network_client.send_vector_insert(&target_node, &node_address, point).await {
             Ok(_) => {
@@ -645,7 +739,7 @@ impl ShardManager {
         );
 
         // 使用网络客户端发送向量删除请求
-        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        let node_address = self.get_node_address(&target_node).await?;
         
         match self.network_client.send_vector_delete(&target_node, &node_address, point_id).await {
             Ok(_) => {
@@ -930,7 +1024,7 @@ impl ShardManager {
         );
 
         // 使用网络客户端发送分片迁移请求
-        let node_address = format!("{}:8080", target_node); // TODO: 从配置获取真实地址
+        let node_address = self.get_node_address(target_node).await?;
         
         match self.network_client.send_shard_migration(target_node, &node_address, data).await {
             Ok(_) => {
@@ -1236,10 +1330,44 @@ impl ShardManager {
             node_loads.insert(node_id.clone(), 0.0);
         }
 
-        // 计算每个节点的分片数量作为负载指标
+        // 计算每个节点的分片负载（基于分片大小和复杂度）
         for shard_info in shard_map.values() {
             if let Some(load) = node_loads.get_mut(&shard_info.primary_node) {
-                *load += 1.0; // 简化的负载计算：每个分片贡献1.0的负载
+                // 企业级负载计算：基于分片状态、大小和副本数量
+                let mut shard_load = 1.0; // 基础负载
+                
+                // 根据分片状态调整负载
+                match shard_info.state {
+                    ShardState::Active => shard_load *= 1.0,     // 正常负载
+                    ShardState::Migrating => shard_load *= 1.5, // 迁移中负载更高
+                    ShardState::Rebalancing => shard_load *= 1.3, // 重平衡负载较高
+                    _ => shard_load *= 0.8, // 其他状态负载较低
+                }
+                
+                // 基于分片向量数量估算负载（需要从存储中获取实际数据）
+                if let Ok(shard_size) = self.estimate_shard_size(shard_info.shard_id).await {
+                    let size_factor = (shard_size as f64 / (1024.0 * 1024.0 * 100.0)).min(2.0); // 每100MB增加负载，最大2倍
+                    shard_load *= 1.0 + size_factor;
+                }
+                
+                // 考虑副本数量（主分片负载更高）
+                shard_load *= 1.0 + (shard_info.replica_nodes.len() as f64 * 0.1); // 每个副本增加10%负载
+                
+                *load += shard_load;
+            }
+            
+            // 为副本节点也计算负载（副本负载为主分片的60%）
+            for replica_node in &shard_info.replica_nodes {
+                if let Some(replica_load) = node_loads.get_mut(replica_node) {
+                    let mut replica_shard_load = 0.6; // 副本基础负载为主分片的60%
+                    
+                    if let Ok(shard_size) = self.estimate_shard_size(shard_info.shard_id).await {
+                        let size_factor = (shard_size as f64 / (1024.0 * 1024.0 * 150.0)).min(1.5); // 副本的大小因子较小
+                        replica_shard_load *= 1.0 + size_factor;
+                    }
+                    
+                    *replica_load += replica_shard_load;
+                }
             }
         }
 
