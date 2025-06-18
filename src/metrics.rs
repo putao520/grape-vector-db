@@ -90,15 +90,15 @@ impl QueryTimeStats {
 /// 缓存统计
 #[derive(Clone)]
 struct CacheStats {
-    hits: AtomicU64,
-    misses: AtomicU64,
+    hits: Arc<AtomicU64>,
+    misses: Arc<AtomicU64>,
 }
 
 impl CacheStats {
     fn new() -> Self {
         Self {
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -166,12 +166,12 @@ pub struct MetricsCollector {
     query_times: Arc<RwLock<QueryTimeStats>>,
     cache_stats: Arc<CacheStats>,
     qps_calculator: Arc<RwLock<QpsCalculator>>,
-    total_queries: AtomicU64,
-    total_documents: AtomicU64,
-    total_errors: AtomicU64,
-    index_build_time: AtomicF64,
-    memory_usage: AtomicF64,
-    disk_usage: AtomicF64,
+    total_queries: Arc<AtomicU64>,
+    total_documents: Arc<AtomicU64>,
+    total_errors: Arc<AtomicU64>,
+    index_build_time: Arc<AtomicF64>,
+    memory_usage: Arc<AtomicF64>,
+    disk_usage: Arc<AtomicF64>,
 }
 
 impl MetricsCollector {
@@ -183,12 +183,12 @@ impl MetricsCollector {
             query_times: Arc::new(RwLock::new(QueryTimeStats::new(10000))),
             cache_stats: Arc::new(CacheStats::new()),
             qps_calculator: Arc::new(RwLock::new(QpsCalculator::new(Duration::from_secs(60)))),
-            total_queries: AtomicU64::new(0),
-            total_documents: AtomicU64::new(0),
-            total_errors: AtomicU64::new(0),
-            index_build_time: AtomicF64::new(0.0),
-            memory_usage: AtomicF64::new(0.0),
-            disk_usage: AtomicF64::new(0.0),
+            total_queries: Arc::new(AtomicU64::new(0)),
+            total_documents: Arc::new(AtomicU64::new(0)),
+            total_errors: Arc::new(AtomicU64::new(0)),
+            index_build_time: Arc::new(AtomicF64::new(0.0)),
+            memory_usage: Arc::new(AtomicF64::new(0.0)),
+            disk_usage: Arc::new(AtomicF64::new(0.0)),
         }
     }
 

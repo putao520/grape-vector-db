@@ -67,8 +67,6 @@ impl DistributedNetworkClient {
     pub fn get_local_node_id(&self) -> &NodeId {
         &self.local_node_id
     }
-        }
-    }
 
     /// 配置超时时间
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
