@@ -1,11 +1,12 @@
 use crate::{
     advanced_storage::{AdvancedStorage, AdvancedStorageConfig},
-    types::{Point, SearchRequest, SearchResponse, Filter},
+    types::{Point, SearchRequest, SearchResponse, Filter, Condition},
     errors::{Result, VectorDbError},
     query::QueryEngine,
     metrics::MetricsCollector,
     index::IndexConfig,
     concurrent::{AtomicCounters, ConcurrentHashMap},
+    storage::VectorStore,
 };
 use std::{
     path::PathBuf,
@@ -473,7 +474,7 @@ impl EmbeddedVectorDB {
         self.counters.increment_search_operations();
         
         Ok(SearchResponse {
-            results,
+            results: results.clone(),
             query_time_ms: search_time.as_millis() as f64,
             total_matches: results.len(),
         })
