@@ -594,31 +594,49 @@ impl HybridSearchEngine {
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
         let text_lower = query_text.to_lowercase();
-        let docs = store.list_documents(0, 1000).await?; // 简化实现
         
-        let mut results = Vec::new();
+        // 使用分页方式处理大量文档，避免一次性加载过多数据
+        let mut all_results = Vec::new();
+        let page_size = 500; // 每次处理500个文档
+        let mut offset = 0;
+        let max_docs = 10000; // 最多处理10000个文档
         
-        for doc in docs {
-            let content_lower = doc.content.to_lowercase();
-            let title_lower = doc.title.to_lowercase();
+        while offset < max_docs {
+            let docs = store.list_documents(offset, page_size).await?;
             
-            let mut score = 0.0;
-            if title_lower.contains(&text_lower) {
-                score += 2.0;
-            }
-            if content_lower.contains(&text_lower) {
-                score += 1.0;
+            if docs.is_empty() {
+                break; // 没有更多文档了
             }
             
-            if score > 0.0 {
-                results.push((doc.id, score));
+            for doc in docs {
+                let content_lower = doc.content.to_lowercase();
+                let title_lower = doc.title.to_lowercase();
+                
+                let mut score = 0.0;
+                
+                // 计算文本匹配分数
+                for term in text_lower.split_whitespace() {
+                    if content_lower.contains(term) {
+                        score += 1.0;
+                    }
+                    if title_lower.contains(term) {
+                        score += 2.0; // 标题匹配权重更高
+                    }
+                }
+                
+                if score > 0.0 {
+                    all_results.push((doc.id, score));
+                }
             }
+            
+            offset += page_size;
         }
-
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        results.truncate(limit);
         
-        Ok(results)
+        // 按分数排序并限制结果数量
+        all_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        all_results.truncate(limit);
+        
+        Ok(all_results)
     }
 
     /// 提取内容摘要

@@ -80,28 +80,51 @@ impl QueryEngine {
             }
         }
 
-        // 简单文本搜索
+        // 简单文本搜索（使用分页避免内存问题）
         if let Some(text) = query_text {
             let text_lower = text.to_lowercase();
-            let docs = store.list_documents(0, 1000).await?; // 简化实现：获取所有文档
+            let mut text_results = Vec::new();
+            let mut text_results_map = HashMap::new();
+            let page_size = 500;
+            let mut offset = 0;
+            let max_docs = 5000; // 限制最大搜索文档数
             
-            for (i, doc) in docs.iter().enumerate() {
-                let content_lower = doc.content.to_lowercase();
-                let title_lower = doc.title.to_lowercase();
+            while offset < max_docs && text_results.len() < limit {
+                let docs = store.list_documents(offset, page_size).await?;
                 
-                // 简单的文本匹配评分
-                let mut score = 0.0;
-                if title_lower.contains(&text_lower) {
-                    score += 2.0; // 标题匹配权重更高
-                }
-                if content_lower.contains(&text_lower) {
-                    score += 1.0;
+                if docs.is_empty() {
+                    break;
                 }
                 
-                if score > 0.0 {
-                    let weighted_score = score * text_weight * (1.0 - i as f32 / docs.len() as f32);
-                    text_results.insert(doc.id.clone(), weighted_score);
+                for doc in docs {
+                    let content_lower = doc.content.to_lowercase();
+                    let title_lower = doc.title.to_lowercase();
+                    
+                    // 简单的文本匹配评分
+                    let mut score = 0.0;
+                    if title_lower.contains(&text_lower) {
+                        score += 2.0; // 标题匹配权重更高
+                    }
+                    if content_lower.contains(&text_lower) {
+                        score += 1.0;
+                    }
+                    
+                    if score > 0.0 {
+                        text_results.push((doc.id.clone(), score));
+                    }
                 }
+                
+                offset += page_size;
+            }
+            
+            // 对文本搜索结果进行排序和权重计算
+            text_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (i, (doc_id, score)) in text_results.iter().enumerate() {
+                if i >= limit {
+                    break;
+                }
+                let weighted_score = score * text_weight * (1.0 - i as f32 / text_results.len().max(1) as f32);
+                text_results_map.insert(doc_id.clone(), weighted_score);
             }
         }
 
@@ -114,7 +137,7 @@ impl QueryEngine {
         }
         
         // 添加或合并文本搜索结果
-        for (doc_id, score) in text_results {
+        for (doc_id, score) in text_results_map {
             *combined_scores.entry(doc_id).or_insert(0.0) += score;
         }
 
