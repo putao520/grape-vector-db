@@ -565,9 +565,6 @@ impl EmbeddedVectorDB {
         
         total_ops > (successful_ops + failed_ops)
     }
-    }
-    
-
 }
 
 // 实现Drop trait以确保资源清理

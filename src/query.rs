@@ -2,7 +2,7 @@ use crate::{
     types::*, 
     config::VectorDbConfig, 
     storage::VectorStore, 
-    index::{HnswIndex, SearchResult as IndexSearchResult},
+    index::HnswVectorIndex,
     metrics::{MetricsCollector, QueryTimer},
     errors::{Result, VectorDbError}
 };
@@ -13,14 +13,14 @@ use std::collections::HashMap;
 /// 查询引擎
 pub struct QueryEngine {
     config: VectorDbConfig,
-    hnsw_index: Arc<HnswIndex>,
+    hnsw_index: Arc<HnswVectorIndex>,
     metrics: Arc<MetricsCollector>,
 }
 
 impl QueryEngine {
     pub fn new(config: &VectorDbConfig, metrics: Arc<MetricsCollector>) -> Result<Self> {
         // 创建HNSW索引
-        let hnsw_index = Arc::new(HnswIndex::new(
+        let hnsw_index = Arc::new(HnswVectorIndex::new(
             config.hnsw.clone(),
             config.vector_dimension,
         ));
@@ -80,6 +80,7 @@ impl QueryEngine {
             }
         }
 
+
         // 简单文本搜索（使用分页避免内存问题）
         if let Some(text) = query_text {
             let text_lower = text.to_lowercase();
@@ -92,6 +93,7 @@ impl QueryEngine {
             while offset < max_docs && text_results.len() < limit {
                 let docs = store.list_documents(offset, page_size).await?;
                 
+
                 if docs.is_empty() {
                     break;
                 }
@@ -100,6 +102,7 @@ impl QueryEngine {
                     let content_lower = doc.content.to_lowercase();
                     let title_lower = doc.title.to_lowercase();
                     
+
                     // 简单的文本匹配评分
                     let mut score = 0.0;
                     if title_lower.contains(&text_lower) {
@@ -111,21 +114,29 @@ impl QueryEngine {
                     
                     if score > 0.0 {
                         text_results.push((doc.id.clone(), score));
+
                     }
                 }
                 
                 offset += page_size;
+
             }
             
             // 对文本搜索结果进行排序和权重计算
             text_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (i, (doc_id, score)) in text_results.iter().enumerate() {
-                if i >= limit {
+
                     break;
                 }
                 let weighted_score = score * text_weight * (1.0 - i as f32 / text_results.len().max(1) as f32);
                 text_results_map.insert(doc_id.clone(), weighted_score);
             }
+            
+            // 按分数排序并返回前N个结果
+            found_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            found_results.truncate(limit);
+            
+            return Ok(found_results);
         }
 
         // 合并结果
@@ -290,7 +301,7 @@ mod tests {
         let metrics = Arc::new(MetricsCollector::new());
         
         let engine = QueryEngine::new(&config, metrics).unwrap();
-        let mut store = BasicVectorStore::new(temp_dir.path().to_path_buf(), &config).await.unwrap();
+        let mut store = BasicVectorStore::new(temp_dir.path().to_str().unwrap())?;
 
         // 添加测试文档
         let doc = DocumentRecord {
@@ -303,7 +314,10 @@ mod tests {
             metadata: std::collections::HashMap::new(),
             language: "zh".to_string(),
             version: "1".to_string(),
+            vector: Some(vec![1.0, 0.0, 0.0]),
             sparse_representation: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         store.add_document(doc.clone()).await.unwrap();
@@ -313,6 +327,6 @@ mod tests {
         // 测试向量搜索
         let results = engine.vector_search(&store, &[1.0, 0.1, 0.0], 5).await.unwrap();
         assert!(!results.is_empty());
-        assert_eq!(results[0].document_id, "test1");
+        assert_eq!(results[0].document.id, "test1");
     }
 } 

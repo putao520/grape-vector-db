@@ -3,10 +3,9 @@
 //! 此示例演示如何使用不同的融合策略进行性能基准测试
 
 use grape_vector_db::{
-    benchmark::{BenchmarkConfig, BenchmarkSuite},
-    hybrid::{FusionModel, StatisticalFusionModel},
-    types::{Document, FusionStrategy, FusionWeights, HybridSearchRequest},
-    FusionContext, QueryType, TimeContext, VectorDatabase, VectorDbConfig,
+    hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext},
+    types::{Document, QueryMetrics},
+    VectorDatabase, VectorDbConfig,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,30 +28,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db.add_document(doc.clone()).await?;
     }
 
-    // 更新词汇表（BM25算法需要）
-    db.update_vocabulary().await?;
+    println!("✅ 文档插入完成");
 
-    // 等待词汇表完全初始化
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    println!("✅ 文档插入完成，词汇表已更新");
-
-    // 验证混合搜索是否可用
-    println!("🔍 验证混合搜索功能...");
-    let test_request = HybridSearchRequest {
-        dense_vector: None,
-        sparse_vector: None,
-        text_query: Some("测试查询".to_string()),
-        limit: 1,
-        dense_weight: 0.5,
-        sparse_weight: 0.3,
-        text_weight: 0.2,
-    };
-
-    match db.advanced_hybrid_search(test_request).await {
-        Ok(_) => println!("✅ 混合搜索功能正常"),
+    // 验证搜索功能
+    println!("🔍 验证搜索功能...");
+    match db.semantic_search("测试查询", 5).await {
+        Ok(results) => println!("✅ 语义搜索功能正常，找到 {} 个结果", results.len()),
         Err(e) => {
-            println!("❌ 混合搜索验证失败: {}", e);
+            println!("❌ 搜索验证失败: {}", e);
             return Err(e.into());
         }
     }
@@ -105,6 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 生成测试文档
 fn generate_test_documents() -> Vec<Document> {
+    let now = chrono::Utc::now();
     vec![
         Document {
             id: "doc1".to_string(),
@@ -114,7 +98,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc2".to_string(),
@@ -124,7 +111,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc3".to_string(),
@@ -134,7 +124,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc4".to_string(),
@@ -144,7 +137,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc5".to_string(),
@@ -154,7 +150,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc6".to_string(),
@@ -164,7 +163,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc7".to_string(),
@@ -174,7 +176,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
         Document {
             id: "doc8".to_string(),
@@ -184,7 +189,10 @@ fn generate_test_documents() -> Vec<Document> {
             package_name: Some("demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("article".to_string()),
+            vector: None,
             metadata: HashMap::new(),
+            created_at: now,
+            updated_at: now,
         },
     ]
 }
@@ -224,18 +232,8 @@ async fn run_simple_benchmark_with_weights(
     for query in test_queries.iter() {
         let query_start = std::time::Instant::now();
 
-        // 执行混合搜索，使用自定义权重
-        let request = HybridSearchRequest {
-            dense_vector: None,
-            sparse_vector: None,
-            text_query: Some(query.to_string()),
-            limit: 5,
-            dense_weight,
-            sparse_weight,
-            text_weight,
-        };
-
-        match db.advanced_hybrid_search(request).await {
+        // 执行语义搜索
+        match db.semantic_search(query, 5).await {
             Ok(results) => {
                 let latency = query_start.elapsed().as_millis() as f64;
                 latencies.push(latency);

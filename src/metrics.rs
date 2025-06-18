@@ -103,12 +103,12 @@ impl CacheStats {
 
     fn record_hit(&self) {
         self.hits.fetch_add(1, Ordering::Relaxed);
-        metrics::increment_counter!("cache_hits_total");
+        metrics::counter!("cache_hits_total").increment(1);
     }
 
     fn record_miss(&self) {
         self.misses.fetch_add(1, Ordering::Relaxed);
-        metrics::increment_counter!("cache_misses_total");
+        metrics::counter!("cache_misses_total").increment(1);
     }
 
     fn hit_rate(&self) -> f64 {
@@ -199,7 +199,7 @@ impl MetricsCollector {
 
         // 更新metrics
         metrics::histogram!("query_duration_ms", time_ms);
-        metrics::increment_counter!("queries_total");
+        metrics::counter!("queries_total").increment(1);
         
         // 更新QPS gauge
         let qps = self.qps_calculator.read().current_qps();
@@ -221,7 +221,7 @@ impl MetricsCollector {
     /// 记录错误
     pub fn record_error(&self) {
         self.total_errors.fetch_add(1, Ordering::Relaxed);
-        metrics::increment_counter!("errors_total");
+        metrics::counter!("errors_total").increment(1);
     }
 
     /// 记录索引构建时间

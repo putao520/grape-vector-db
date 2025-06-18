@@ -1,6 +1,34 @@
 use crate::types::VectorDbError;
 use instant_distance::{Builder, HnswMap, Point, Search};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+/// 索引配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexConfig {
+    /// 索引类型
+    pub index_type: String,
+    /// 最大连接数
+    pub max_connections: usize,
+    /// 构建时的最大连接数
+    pub max_connections_per_layer: usize,
+    /// 候选搜索因子
+    pub ef_construction: usize,
+    /// 搜索时的候选因子
+    pub ef_search: usize,
+}
+
+impl Default for IndexConfig {
+    fn default() -> Self {
+        Self {
+            index_type: "hnsw".to_string(),
+            max_connections: 16,
+            max_connections_per_layer: 8,
+            ef_construction: 200,
+            ef_search: 100,
+        }
+    }
+}
 
 /// 向量索引特征
 pub trait VectorIndex: Send + Sync {

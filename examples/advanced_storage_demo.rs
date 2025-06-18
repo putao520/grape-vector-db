@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("🍇 Grape Vector DB - Advanced Storage Engine Demo");
     println!("================================================\n");
 
@@ -39,25 +40,25 @@ fn main() -> Result<()> {
     println!("   Checksums: enabled\n");
 
     // Demo 1: Basic Operations
-    demo_basic_operations(&storage)?;
+    demo_basic_operations(&storage).await?;
 
     // Demo 2: Transaction Support
-    demo_transaction_support(&storage)?;
+    demo_transaction_support(&storage).await?;
 
     // Demo 3: Backup and Recovery
-    demo_backup_recovery(&storage)?;
+    demo_backup_recovery(&storage).await?;
 
     // Demo 4: Performance Benchmarks
-    demo_performance_benchmarks(&storage)?;
+    demo_performance_benchmarks(&storage).await?;
 
     // Demo 5: Multi-tree Usage
-    demo_multi_tree_usage(&storage)?;
+    demo_multi_tree_usage(&storage).await?;
 
     println!("🎉 All demos completed successfully!");
     Ok(())
 }
 
-fn demo_basic_operations(storage: &AdvancedStorage) -> Result<()> {
+async fn demo_basic_operations(storage: &AdvancedStorage) -> Result<()> {
     println!("📝 Demo 1: Basic Operations");
     println!("---------------------------");
 
@@ -140,7 +141,7 @@ fn demo_basic_operations(storage: &AdvancedStorage) -> Result<()> {
     Ok(())
 }
 
-fn demo_transaction_support(storage: &AdvancedStorage) -> Result<()> {
+async fn demo_transaction_support(storage: &AdvancedStorage) -> Result<()> {
     println!("🔄 Demo 2: Transaction Support");
     println!("------------------------------");
 
@@ -169,11 +170,12 @@ fn demo_transaction_support(storage: &AdvancedStorage) -> Result<()> {
 
     // Batch store with transaction
     let batch_start = Instant::now();
-    storage.batch_store_vectors(&batch_vectors)?;
+    let batch_len = batch_vectors.len();
+    storage.batch_store_vectors(batch_vectors).await?;
     let batch_duration = batch_start.elapsed();
     println!(
         "   ✅ Batch stored {} vectors in {:?}",
-        batch_vectors.len(),
+        batch_len,
         batch_duration
     );
 
@@ -201,14 +203,14 @@ fn demo_transaction_support(storage: &AdvancedStorage) -> Result<()> {
     Ok(())
 }
 
-fn demo_backup_recovery(storage: &AdvancedStorage) -> Result<()> {
+async fn demo_backup_recovery(storage: &AdvancedStorage) -> Result<()> {
     println!("💾 Demo 3: Backup and Recovery");
     println!("------------------------------");
 
     let start = Instant::now();
 
     // Get initial stats
-    let initial_stats = storage.get_stats()?;
+    let initial_stats = storage.get_stats();
     println!("   📊 Initial stats:");
     println!("      Keys: {}", initial_stats.estimated_keys);
     println!("      Total size: {} bytes", initial_stats.total_size);
@@ -243,7 +245,7 @@ fn demo_backup_recovery(storage: &AdvancedStorage) -> Result<()> {
     println!("   ✅ Compacted database in {:?}", compact_duration);
 
     // Get final stats
-    let final_stats = storage.get_stats()?;
+    let final_stats = storage.get_stats();
     println!("   📊 Final stats:");
     println!("      Keys: {}", final_stats.estimated_keys);
     println!("      Total size: {} bytes", final_stats.total_size);
@@ -261,7 +263,7 @@ fn demo_backup_recovery(storage: &AdvancedStorage) -> Result<()> {
     Ok(())
 }
 
-fn demo_performance_benchmarks(storage: &AdvancedStorage) -> Result<()> {
+async fn demo_performance_benchmarks(storage: &AdvancedStorage) -> Result<()> {
     println!("🚀 Demo 4: Performance Benchmarks");
     println!("----------------------------------");
 
@@ -304,7 +306,7 @@ fn demo_performance_benchmarks(storage: &AdvancedStorage) -> Result<()> {
 
     // Benchmark batch write
     let write_start = Instant::now();
-    storage.batch_store_vectors(&large_dataset)?;
+    storage.batch_store_vectors(large_dataset).await?;
     let write_duration = write_start.elapsed();
     let write_qps = vector_count as f64 / write_duration.as_secs_f64();
     println!(
@@ -345,7 +347,7 @@ fn demo_performance_benchmarks(storage: &AdvancedStorage) -> Result<()> {
     Ok(())
 }
 
-fn demo_multi_tree_usage(storage: &AdvancedStorage) -> Result<()> {
+async fn demo_multi_tree_usage(storage: &AdvancedStorage) -> Result<()> {
     println!("🌳 Demo 5: Multi-tree Usage");
     println!("---------------------------");
 
@@ -379,10 +381,10 @@ fn demo_multi_tree_usage(storage: &AdvancedStorage) -> Result<()> {
         });
     }
 
-    storage.batch_store_vectors(&demo_vectors)?;
+    storage.batch_store_vectors(demo_vectors).await?;
     println!(
         "   ✅ Stored {} vectors across multiple trees",
-        demo_vectors.len()
+        10
     );
 
     // Verify data separation by checking that we can retrieve vectors

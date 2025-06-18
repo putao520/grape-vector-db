@@ -263,6 +263,7 @@ impl VectorDbService for VectorDbServiceImpl {
         Ok(Response::new(response))
     }
 
+
     // 向量操作方法
     async fn upsert_vector(&self, request: Request<UpsertVectorRequest>) -> Result<Response<UpsertVectorResponse>, Status> {
         let req = request.into_inner();
@@ -300,20 +301,24 @@ impl VectorDbService for VectorDbServiceImpl {
             Ok(_) => {
                 let response = UpsertVectorResponse {
                     success: true,
+
                     error: None,
                 };
                 Ok(Response::new(response))
             }
             Err(e) => {
+
                 error!("向量插入失败: {}", e);
                 let response = UpsertVectorResponse {
                     success: false,
                     error: Some(format!("向量插入失败: {}", e)),
+
                 };
                 Ok(Response::new(response))
             }
         }
     }
+
 
     async fn delete_vector(&self, request: Request<DeleteVectorRequest>) -> Result<Response<DeleteVectorResponse>, Status> {
         let req = request.into_inner();
@@ -325,19 +330,23 @@ impl VectorDbService for VectorDbServiceImpl {
                 let response = DeleteVectorResponse {
                     deleted,
                     error: None,
+
                 };
                 Ok(Response::new(response))
             }
             Err(e) => {
                 error!("删除向量失败: {}", e);
                 let response = DeleteVectorResponse {
+
                     deleted: false,
                     error: Some(format!("删除向量失败: {}", e)),
+
                 };
                 Ok(Response::new(response))
             }
         }
     }
+
 
     async fn search_vectors(&self, request: Request<SearchVectorRequest>) -> Result<Response<SearchVectorResponse>, Status> {
         let req = request.into_inner();
@@ -374,6 +383,7 @@ impl VectorDbService for VectorDbServiceImpl {
                 let response = SearchVectorResponse {
                     results: grpc_results,
                     query_time_ms: elapsed.as_millis() as f64,
+
                     error: None,
                 };
                 Ok(Response::new(response))
@@ -384,11 +394,13 @@ impl VectorDbService for VectorDbServiceImpl {
                     results: vec![],
                     query_time_ms: 0.0,
                     error: Some(format!("向量搜索失败: {}", e)),
+
                 };
                 Ok(Response::new(response))
             }
         }
     }
+
 
     async fn get_vector(&self, request: Request<GetVectorRequest>) -> Result<Response<GetVectorResponse>, Status> {
         let req = request.into_inner();
@@ -423,14 +435,17 @@ impl VectorDbService for VectorDbServiceImpl {
                 let response = GetVectorResponse {
                     point: None,
                     error: Some("向量未找到".to_string()),
+
                 };
                 Ok(Response::new(response))
             }
             Err(e) => {
                 error!("获取向量失败: {}", e);
                 let response = GetVectorResponse {
+
                     point: None,
                     error: Some(format!("获取向量失败: {}", e)),
+
                 };
                 Ok(Response::new(response))
             }
@@ -465,6 +480,7 @@ impl VectorDbService for VectorDbServiceImpl {
             error: None,
         };
         Ok(Response::new(response))
+
     }
 
     async fn get_cluster_info(&self, _request: Request<GetClusterInfoRequest>) -> Result<Response<GetClusterInfoResponse>, Status> {
