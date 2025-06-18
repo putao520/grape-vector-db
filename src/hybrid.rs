@@ -13,7 +13,7 @@ use crate::{
         QueryMetrics
     },
     sparse::{SparseIndex, SimpleTokenizer},
-    index::HnswIndex,
+    index::HnswVectorIndex,
     storage::VectorStore,
     errors::{Result, VectorDbError},
 };
@@ -154,7 +154,7 @@ impl FusionModel for StatisticalFusionModel {
 /// 混合搜索引擎
 pub struct HybridSearchEngine {
     /// 密集向量搜索引擎
-    dense_engine: Arc<HnswIndex>,
+    dense_engine: Arc<HnswVectorIndex>,
     /// 稀疏向量搜索引擎
     sparse_engine: Arc<SparseIndex>,
     /// 文本分词器
@@ -174,7 +174,7 @@ pub struct HybridSearchEngine {
 impl HybridSearchEngine {
     /// 创建新的混合搜索引擎
     pub fn new(
-        dense_engine: Arc<HnswIndex>,
+        dense_engine: Arc<HnswVectorIndex>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
     ) -> Self {
@@ -192,7 +192,7 @@ impl HybridSearchEngine {
 
     /// 创建带有学习式融合模型的搜索引擎
     pub fn with_fusion_model(
-        dense_engine: Arc<HnswIndex>,
+        dense_engine: Arc<HnswVectorIndex>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
         fusion_model: Arc<Mutex<dyn FusionModel>>,
@@ -897,7 +897,7 @@ impl HybridSearchEngine {
         
         let total_queries = history.len() as f64;
         let cache_hits = history.iter()
-            .filter(|metrics| metrics.search_time.as_millis() < 10) // 假设小于10ms的查询为缓存命中
+            .filter(|metrics| metrics.duration_ms < 10.0) // 假设小于10ms的查询为缓存命中
             .count() as f64;
             
         if total_queries > 0.0 {
@@ -930,14 +930,14 @@ mod tests {
     use super::*;
     use crate::{
         sparse::{SparseIndex, BM25Parameters},
-        index::{HnswIndex},
+        index::{HnswVectorIndex},
         config::HnswConfig,
         types::FusionStrategy,
     };
 
     #[test]
     fn test_rrf_fusion() {
-        let dense_engine = Arc::new(HnswIndex::new(HnswConfig::default(), 384));
+        let dense_engine = Arc::new(HnswVectorIndex::new(HnswConfig::default(), 384));
         let sparse_engine = Arc::new(SparseIndex::new(BM25Parameters::default()));
         
         let engine = HybridSearchEngine::new(

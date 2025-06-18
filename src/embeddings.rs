@@ -89,7 +89,7 @@ impl OpenAICompatibleProvider {
                 match config.provider.as_str() {
                     "openai" => "https://api.openai.com/v1/embeddings".to_string(),
                     "azure" => {
-                        return Err(VectorDbError::config_error("Azure提供商需要指定endpoint"));
+                        return Err(VectorDbError::ConfigError("Azure提供商需要指定endpoint".to_string()));
                     },
                     _ => "http://localhost:11434/api/embeddings".to_string(), // 默认本地端点
                 }
@@ -249,7 +249,7 @@ pub fn create_provider(config: &VectorDbConfig) -> Result<Box<dyn EmbeddingProvi
             let dimension = config.embedding.dimension.unwrap_or(config.vector_dimension);
             Ok(Box::new(MockEmbeddingProvider::new(dimension)))
         },
-        provider => Err(VectorDbError::config_error(format!("不支持的嵌入提供商: {}", provider))),
+        provider => Err(VectorDbError::ConfigError(format!("不支持的嵌入提供商: {}", provider))),
     }
 }
 

@@ -137,7 +137,7 @@ pub mod types;
 
 // 重新导出主要类型
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
-pub use embedded::EmbeddedVectorDb;
+pub use embedded::EmbeddedVectorDB;
 pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
 pub use hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};

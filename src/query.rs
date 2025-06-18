@@ -2,7 +2,7 @@ use crate::{
     types::*, 
     config::VectorDbConfig, 
     storage::VectorStore, 
-    index::{HnswIndex, SearchResult as IndexSearchResult},
+    index::HnswVectorIndex,
     metrics::{MetricsCollector, QueryTimer},
     errors::{Result, VectorDbError}
 };
@@ -13,14 +13,14 @@ use std::collections::HashMap;
 /// 查询引擎
 pub struct QueryEngine {
     config: VectorDbConfig,
-    hnsw_index: Arc<HnswIndex>,
+    hnsw_index: Arc<HnswVectorIndex>,
     metrics: Arc<MetricsCollector>,
 }
 
 impl QueryEngine {
     pub fn new(config: &VectorDbConfig, metrics: Arc<MetricsCollector>) -> Result<Self> {
         // 创建HNSW索引
-        let hnsw_index = Arc::new(HnswIndex::new(
+        let hnsw_index = Arc::new(HnswVectorIndex::new(
             config.hnsw.clone(),
             config.vector_dimension,
         ));
@@ -267,7 +267,7 @@ mod tests {
         let metrics = Arc::new(MetricsCollector::new());
         
         let engine = QueryEngine::new(&config, metrics).unwrap();
-        let mut store = BasicVectorStore::new(temp_dir.path().to_path_buf(), &config).await.unwrap();
+        let mut store = BasicVectorStore::new(temp_dir.path().to_str().unwrap())?;
 
         // 添加测试文档
         let doc = DocumentRecord {
@@ -280,7 +280,10 @@ mod tests {
             metadata: std::collections::HashMap::new(),
             language: "zh".to_string(),
             version: "1".to_string(),
+            vector: Some(vec![1.0, 0.0, 0.0]),
             sparse_representation: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         };
 
         store.add_document(doc.clone()).await.unwrap();
@@ -290,6 +293,6 @@ mod tests {
         // 测试向量搜索
         let results = engine.vector_search(&store, &[1.0, 0.1, 0.0], 5).await.unwrap();
         assert!(!results.is_empty());
-        assert_eq!(results[0].document_id, "test1");
+        assert_eq!(results[0].document.id, "test1");
     }
 } 
