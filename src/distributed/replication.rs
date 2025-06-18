@@ -279,7 +279,7 @@ impl ReplicationManager {
     /// 异步复制
     async fn replicate_asynchronous(
         &self,
-        _shard_id: ShardId,
+        shard_id: ShardId,
         data: Vec<u8>,
         replica_group: &ReplicaGroup,
         request_id: &str,

@@ -269,8 +269,7 @@ impl ClusterManager {
         
         // 清理本地节点状态
         let mut local_info = self.local_node_info.write().await;
-        local_info.state = crate::distributed::NodeState::Standalone;
-        local_info.role = crate::distributed::NodeRole::Standalone;
+        local_info.state = crate::types::NodeState::Offline;
         
         Ok(())
     }

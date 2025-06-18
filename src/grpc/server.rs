@@ -436,13 +436,12 @@ impl VectorDbService for VectorDbServiceImpl {
         }
 
         // 创建节点信息
-        let node_info = crate::distributed::NodeInfo {
+        let node_info = crate::types::NodeInfo {
             id: req.node_id.clone(),
             address: req.node_address,
-            role: crate::distributed::NodeRole::Follower,
-            state: crate::distributed::NodeState::Joining,
-            last_heartbeat: chrono::Utc::now(),
-            load: crate::distributed::NodeLoad::default(),
+            port: 8080, // 默认端口
+            state: crate::types::NodeState::Joining,
+            last_heartbeat: chrono::Utc::now().timestamp() as u64,
         };
 
         // 尝试加入集群
