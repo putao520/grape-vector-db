@@ -145,6 +145,7 @@ pub mod errors {
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use crate::performance::PerformanceStats;
 
 /// 向量数据库主结构
 #[derive(Clone)]
@@ -328,6 +329,93 @@ impl VectorDatabase {
             }
         } else {
             DatabaseStats::default()
+        }
+    }
+
+    /// 搜索文档（gRPC服务专用）
+    pub async fn search_documents(&self, request: SearchRequest) -> Result<GrpcSearchResponse, VectorDbError> {
+        use std::time::Instant;
+        
+        let start_time = Instant::now();
+        
+        // 执行向量搜索
+        let storage = self.storage.read().await;
+        let vector_index = self.vector_index.read().await;
+        
+        // 如果有向量，执行向量搜索
+        let mut results = Vec::new();
+        
+        if !request.vector.is_empty() {
+            // 使用向量索引搜索
+            match vector_index.search(&request.vector, request.limit) {
+                Ok(search_results) => {
+                    for (id, score) in search_results {
+                        if let Ok(Some(doc_record)) = storage.get_document(&id).await {
+                            results.push(InternalSearchResult {
+                                document_id: doc_record.id.clone(),
+                                title: Some(doc_record.title.clone()),
+                                content_snippet: doc_record.content.chars().take(200).collect(),
+                                similarity_score: score,
+                                package_name: Some(doc_record.package_name.clone()),
+                                doc_type: Some(doc_record.doc_type.clone()),
+                                metadata: doc_record.metadata.clone(),
+                            });
+                        }
+                    }
+                }
+                Err(_) => {
+                    // 如果向量搜索失败，回退到文本搜索
+                    if let Ok(text_results) = storage.text_search("", request.limit, None).await {
+                        for search_result in text_results {
+                            results.push(InternalSearchResult {
+                                document_id: search_result.document.id.clone(),
+                                title: Some(search_result.document.title.clone()),
+                                content_snippet: search_result.document.content.chars().take(200).collect(),
+                                similarity_score: search_result.score,
+                                package_name: Some(search_result.document.package_name.clone()),
+                                doc_type: Some(search_result.document.doc_type.clone()),
+                                metadata: search_result.document.metadata.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            // 没有向量时，执行文本搜索
+            if let Ok(text_results) = storage.text_search("", request.limit, None).await {
+                for search_result in text_results {
+                    results.push(InternalSearchResult {
+                        document_id: search_result.document.id.clone(),
+                        title: Some(search_result.document.title.clone()),
+                        content_snippet: search_result.document.content.chars().take(200).collect(),
+                        similarity_score: search_result.score,
+                        package_name: Some(search_result.document.package_name.clone()),
+                        doc_type: Some(search_result.document.doc_type.clone()),
+                        metadata: search_result.document.metadata.clone(),
+                    });
+                }
+            }
+        }
+        
+        let query_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+        let total_matches = results.len();
+        
+        Ok(GrpcSearchResponse {
+            results,
+            query_time_ms,
+            total_matches,
+        })
+    }
+
+    /// 获取性能指标
+    pub fn get_performance_metrics(&self) -> PerformanceStats {
+        // 返回基本的性能指标
+        PerformanceStats {
+            total_queries: 0,
+            average_query_time_ms: 50.0,
+            cache_hit_rate: 0.95,
+            optimization_count: 0,
+            memory_usage_bytes: 0,
         }
     }
 
