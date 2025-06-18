@@ -672,7 +672,8 @@ impl HybridSearchEngine {
             // 根据查询特征调整权重
             let context = self.analyze_query_context(request);
             if let Some(model) = &self.fusion_model {
-                let model_guard = model.lock().unwrap();
+                let model_guard = model.lock()
+                    .map_err(|_| VectorDbError::Other("Failed to acquire model lock".to_string()))?;
                 model_guard.predict_weights(
                     request.text_query.as_deref().unwrap_or(""),
                     &context
@@ -810,7 +811,8 @@ impl HybridSearchEngine {
         request: &HybridSearchRequest,
     ) -> Result<FusionWeights> {
         // 获取相似查询的历史性能
-        let history = self.query_history.lock().unwrap();
+        let history = self.query_history.lock()
+            .map_err(|_| VectorDbError::Other("Failed to acquire query history lock".to_string()))?;
         let query_text = request.text_query.as_deref().unwrap_or("");
         
         // 找到相似的历史查询

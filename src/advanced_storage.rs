@@ -160,11 +160,11 @@ impl AdvancedStorage {
             payload_json,
             created_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
             updated_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
         };
 
@@ -265,7 +265,7 @@ impl AdvancedStorage {
         if let Some(backup_path) = &self.config.backup_path {
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             let backup_id = format!("backup_{}", timestamp);
             let backup_dir = backup_path.join(&backup_id);
@@ -450,11 +450,11 @@ impl AdvancedStorage {
                         payload_json,
                         created_at: SystemTime::now()
                             .duration_since(UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs(),
                         updated_at: SystemTime::now()
                             .duration_since(UNIX_EPOCH)
-                            .unwrap()
+                            .unwrap_or_default()
                             .as_secs(),
                     };
 

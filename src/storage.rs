@@ -518,7 +518,10 @@ impl VectorStore for BasicVectorStore {
                         if ids.len() >= limit {
                             break;
                         }
-                        ids.push(key_str.strip_prefix("doc:").unwrap().to_string());
+                        // 安全地提取文档ID，如果前缀不匹配则跳过
+                        if let Some(doc_id) = key_str.strip_prefix("doc:") {
+                            ids.push(doc_id.to_string());
+                        }
                     }
                     current += 1;
                 }
