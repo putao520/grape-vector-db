@@ -138,6 +138,17 @@ pub struct SearchResponse {
     pub total_matches: usize,
 }
 
+/// gRPC 搜索响应
+#[derive(Debug, Clone)]
+pub struct GrpcSearchResponse {
+    /// 搜索结果
+    pub results: Vec<InternalSearchResult>,
+    /// 查询耗时（毫秒）
+    pub query_time_ms: f64,
+    /// 总匹配数量
+    pub total_matches: usize,
+}
+
 /// 搜索参数
 #[derive(Debug, Clone)]
 pub struct SearchParams {
@@ -400,6 +411,25 @@ pub struct SearchResult {
     pub matched_snippets: Option<Vec<String>>,
 }
 
+/// 内部搜索结果（用于gRPC服务）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalSearchResult {
+    /// 文档ID
+    pub document_id: String,
+    /// 文档标题
+    pub title: Option<String>,
+    /// 内容片段
+    pub content_snippet: String,
+    /// 相似度分数
+    pub similarity_score: f32,
+    /// 包名
+    pub package_name: Option<String>,
+    /// 文档类型
+    pub doc_type: Option<String>,
+    /// 元数据
+    pub metadata: HashMap<String, String>,
+}
+
 /// 分数明细
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoreBreakdown {
@@ -441,6 +471,27 @@ pub struct DatabaseStats {
     pub cache_hit_rate: f64,
     /// BM25 统计信息
     pub bm25_stats: Option<BM25Stats>,
+}
+
+/// 性能指标
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceMetrics {
+    /// 平均查询时间（毫秒）
+    pub avg_query_time_ms: f64,
+    /// P95 查询时间（毫秒）
+    pub p95_query_time_ms: f64,
+    /// P99 查询时间（毫秒）
+    pub p99_query_time_ms: f64,
+    /// 总查询数
+    pub total_queries: u64,
+    /// 每秒查询数
+    pub queries_per_second: f64,
+    /// 缓存命中次数
+    pub cache_hits: u64,
+    /// 缓存未命中次数
+    pub cache_misses: u64,
+    /// 内存使用量（MB）
+    pub memory_usage_mb: f64,
 }
 
 impl Default for DatabaseStats {
