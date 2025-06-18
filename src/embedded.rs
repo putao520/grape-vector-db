@@ -399,7 +399,17 @@ impl EmbeddedVectorDB {
         self.storage.warmup_cache().await?;
         
         // 2. 预加载索引（如果存在）
-        // TODO: 实现索引预加载
+        if let Some(ref index) = self.index {
+            tracing::info!("Preloading vector index...");
+            let index_start = Instant::now();
+            
+            // 预热索引缓存 - 加载一些最近使用的向量到内存
+            if let Err(e) = index.warmup().await {
+                tracing::warn!("Index warmup failed: {}", e);
+            } else {
+                tracing::info!("Index preloading completed in {:?}", index_start.elapsed());
+            }
+        }
         
         tracing::info!("Database warmup completed in {:?}", start.elapsed());
         Ok(())
@@ -418,9 +428,33 @@ impl EmbeddedVectorDB {
     
     /// 异步搜索
     async fn search_async(&self, request: SearchRequest) -> Result<SearchResponse> {
-        // TODO: 实现搜索逻辑
-        // 这里需要与现有的查询引擎集成
-        Err(VectorDbError::Other("Search not implemented yet".into()))
+        self.ensure_ready()?;
+        
+        // 使用查询引擎执行搜索
+        let start = Instant::now();
+        
+        // 执行向量搜索
+        let results = if let Some(ref vector) = request.vector {
+            // 向量搜索
+            self.query_engine.vector_search(vector, request.limit).await?
+        } else if let Some(ref query_text) = request.query {
+            // 文本搜索 (将转换为向量搜索)
+            self.query_engine.text_search(query_text, request.limit).await?
+        } else {
+            return Err(VectorDbError::Other("Either vector or query must be provided".into()));
+        };
+        
+        let search_time = start.elapsed();
+        
+        // 更新度量
+        self.metrics.record_search_latency(search_time);
+        self.counters.increment_search_operations();
+        
+        Ok(SearchResponse {
+            results,
+            search_time_ms: search_time.as_millis() as u64,
+            total_results: results.len(),
+        })
     }
     
     /// 异步插入
@@ -431,9 +465,48 @@ impl EmbeddedVectorDB {
     }
     
     /// 异步删除
-    async fn delete_async(&self, _filter: Filter) -> Result<usize> {
-        // TODO: 实现基于过滤器的删除
-        Err(VectorDbError::Other("Delete not implemented yet".into()))
+    async fn delete_async(&self, filter: Filter) -> Result<usize> {
+        self.ensure_ready()?;
+        
+        let start = Instant::now();
+        let mut deleted_count = 0;
+        
+        // 根据过滤器类型执行删除
+        match filter {
+            Filter::Id(id) => {
+                // 按ID删除单个文档
+                if self.storage.delete_document(&id).await? {
+                    deleted_count = 1;
+                }
+            }
+            Filter::Ids(ids) => {
+                // 批量按ID删除
+                for id in ids {
+                    if self.storage.delete_document(&id).await? {
+                        deleted_count += 1;
+                    }
+                }
+            }
+            Filter::Expression(_expr) => {
+                // 基于表达式的复杂过滤删除
+                // 首先找到匹配的文档
+                let matching_docs = self.storage.filter_documents(&filter).await?;
+                for doc_id in matching_docs {
+                    if self.storage.delete_document(&doc_id).await? {
+                        deleted_count += 1;
+                    }
+                }
+            }
+        }
+        
+        let delete_time = start.elapsed();
+        
+        // 更新度量
+        self.metrics.record_delete_latency(delete_time);
+        self.counters.increment_operations();
+        
+        tracing::info!("Deleted {} documents in {:?}", deleted_count, delete_time);
+        Ok(deleted_count)
     }
     
     /// 异步关闭

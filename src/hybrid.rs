@@ -885,6 +885,26 @@ impl HybridSearchEngine {
         self.performance_stats.lock().unwrap().clone()
     }
 
+    /// 计算缓存命中率
+    fn calculate_cache_hit_rate(&self) -> f64 {
+        // 基于查询历史计算缓存命中率
+        let history = self.query_history.lock().unwrap();
+        if history.is_empty() {
+            return 0.0;
+        }
+        
+        let total_queries = history.len() as f64;
+        let cache_hits = history.iter()
+            .filter(|metrics| metrics.search_time.as_millis() < 10) // 假设小于10ms的查询为缓存命中
+            .count() as f64;
+            
+        if total_queries > 0.0 {
+            cache_hits / total_queries
+        } else {
+            0.0
+        }
+    }
+
     /// 获取搜索引擎统计信息
     pub fn get_stats(&self) -> crate::types::DatabaseStats {
         let sparse_stats = self.sparse_engine.get_stats();
@@ -897,7 +917,7 @@ impl HybridSearchEngine {
             memory_usage_mb: dense_stats.memory_usage_mb + self.sparse_engine.get_memory_usage_mb(),
             dense_index_size_mb: dense_stats.memory_usage_mb,
             sparse_index_size_mb: self.sparse_engine.get_memory_usage_mb(),
-            cache_hit_rate: 0.0, // TODO: 实现缓存统计
+            cache_hit_rate: self.calculate_cache_hit_rate(),
             bm25_stats: Some(sparse_stats),
         }
     }
