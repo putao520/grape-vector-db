@@ -804,12 +804,13 @@ mod tests {
         };
         
         let executor = RetryExecutor::new(config);
-        let mut attempt_count = 0;
+        let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         
         let result = executor.execute(|| {
-            attempt_count += 1;
+            let count = attempt_count.clone();
             async move {
-                if attempt_count < 3 {
+                let current_attempt = count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if current_attempt < 3 {
                     Err("test_error")
                 } else {
                     Ok("success")
@@ -818,7 +819,7 @@ mod tests {
         }).await;
         
         assert_eq!(result.unwrap(), "success");
-        assert_eq!(attempt_count, 3);
+        assert_eq!(attempt_count.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
 
     #[tokio::test]
