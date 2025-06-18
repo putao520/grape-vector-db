@@ -291,7 +291,7 @@ mod tests {
         let metrics = Arc::new(MetricsCollector::new());
         
         let engine = QueryEngine::new(&config, metrics).unwrap();
-        let mut store = BasicVectorStore::new(temp_dir.path().to_str().unwrap())?;
+        let mut store = BasicVectorStore::new(temp_dir.path().to_str().unwrap()).unwrap();
 
         // 添加测试文档
         let doc = DocumentRecord {
@@ -310,7 +310,21 @@ mod tests {
             updated_at: chrono::Utc::now(),
         };
 
-        store.add_document(doc.clone()).await.unwrap();
+        // 将DocumentRecord转换为Document
+        let document = Document {
+            id: doc.id.clone(),
+            content: doc.content.clone(),
+            title: Some(doc.title.clone()),
+            language: Some(doc.language.clone()),
+            package_name: Some(doc.package_name.clone()),
+            version: Some(doc.version.clone()),
+            doc_type: Some(doc.doc_type.clone()),
+            vector: doc.vector.clone(),
+            sparse_representation: doc.sparse_representation.clone(),
+            metadata: doc.metadata.clone(),
+        };
+
+        store.insert_document(document).await.unwrap();
         engine.add_document(&doc).await.unwrap();
         engine.rebuild_index().await.unwrap();
 

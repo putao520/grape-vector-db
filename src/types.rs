@@ -915,6 +915,9 @@ pub enum VectorDbError {
     #[error("过滤错误: {0}")]
     FilterError(String),
 
+    #[error("嵌入错误: {0}")]
+    EmbeddingError(String),
+
     #[error("其他错误: {0}")]
     Other(String),
 }
@@ -923,6 +926,11 @@ impl VectorDbError {
     /// 创建一个通用错误
     pub fn other(msg: impl Into<String>) -> Self {
         VectorDbError::Other(msg.into())
+    }
+
+    /// 创建一个嵌入错误
+    pub fn embedding_error(msg: impl Into<String>) -> Self {
+        VectorDbError::EmbeddingError(msg.into())
     }
 }
 

@@ -444,7 +444,7 @@ impl FaissVectorIndex {
             }
             
             // 计算新的聚类中心
-            let mut max_center_movement = 0.0;
+            let mut max_center_movement: f32 = 0.0;
             for (i, count) in cluster_counts.iter().enumerate() {
                 if *count > 0 {
                     for d in 0..dimension {

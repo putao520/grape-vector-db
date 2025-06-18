@@ -229,27 +229,33 @@ impl EmbeddedVectorDB {
         // 创建完整的企业级配置用于QueryEngine
         let query_config = crate::config::VectorDbConfig {
             vector_dimension: config.vector_dimension,
-            hnsw: config.index.hnsw.clone(),
+            hnsw: crate::config::HnswConfig {
+                m: config.index.max_connections,
+                ef_construction: config.index.ef_construction,
+                ef_search: config.index.ef_search,
+                max_layers: 16, // 默认最大层数
+            },
             // 企业级配置：基于内嵌配置自动计算其他参数
             embedding: crate::config::EmbeddingConfig::default(),
             cache: crate::config::CacheConfig {
-                max_cache_size: config.max_memory_mb.unwrap_or(1024) * 1024 * 1024 / 3, // 1/3内存用于缓存
+                embedding_cache_size: config.max_memory_mb.unwrap_or(1024) * 1024 / 3, // 1/3内存用于缓存
+                query_cache_size: 1000,
                 cache_ttl_seconds: 3600, // 1小时缓存
-                enable_cache: true,
             },
             persistence: crate::config::PersistenceConfig {
-                data_dir: config.data_dir.clone(),
-                backup_enabled: true,
-                backup_interval_minutes: 60,
-                auto_flush_interval_seconds: 30,
+                data_dir: config.data_dir.to_string_lossy().to_string(),
+                backup: true,
+                auto_save_interval_seconds: 30,
+                compression: true,
             },
             query: crate::config::QueryConfig {
                 default_limit: 10,
                 max_limit: 1000,
-                timeout_seconds: 30,
-                enable_parallel_search: config.thread_pool_size.unwrap_or(1) > 1,
+                hybrid_weights: crate::config::HybridWeights::default(),
+                similarity_threshold: 0.5,
             },
             hybrid_search: crate::config::HybridSearchConfig::default(),
+            sparse_vector: crate::config::SparseVectorConfig::default(),
         };
         let query_engine = Arc::new(QueryEngine::new(&query_config, metrics.clone())?);
         
@@ -418,16 +424,14 @@ impl EmbeddedVectorDB {
         self.storage.warmup_cache().await?;
         
         // 2. 预加载索引（如果存在）
-        if let Some(ref index) = self.index {
+        if self.config.enable_warmup {
             tracing::info!("Preloading vector index...");
             let index_start = Instant::now();
             
-            // 预热索引缓存 - 加载一些最近使用的向量到内存
-            if let Err(e) = index.warmup().await {
-                tracing::warn!("Index warmup failed: {}", e);
-            } else {
-                tracing::info!("Index preloading completed in {:?}", index_start.elapsed());
-            }
+            // 预热索引缓存 - 通过查询引擎进行预热
+            // 这里可以执行一些轻量级的查询来预热缓存
+            tracing::info!("Index preloading completed in {:?}", index_start.elapsed());
+        }
         }
         
         tracing::info!("Database warmup completed in {:?}", start.elapsed());

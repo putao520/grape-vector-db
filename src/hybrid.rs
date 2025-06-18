@@ -928,7 +928,7 @@ impl HybridSearchEngine {
     /// 获取搜索引擎统计信息
     pub fn get_stats(&self) -> crate::types::DatabaseStats {
         let sparse_stats = self.sparse_engine.get_stats();
-        let dense_stats = self.dense_engine.stats();
+        let dense_stats = self.dense_engine.get_stats();
         
         crate::types::DatabaseStats {
             document_count: sparse_stats.total_documents,
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn test_rrf_fusion() {
-        let dense_engine = Arc::new(HnswVectorIndex::new(HnswConfig::default(), 384));
+        let dense_engine = Arc::new(HnswVectorIndex::new());
         let sparse_engine = Arc::new(SparseIndex::new(BM25Parameters::default()));
         
         let engine = HybridSearchEngine::new(
