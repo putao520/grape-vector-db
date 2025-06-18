@@ -105,6 +105,16 @@ impl HnswVectorIndex {
         }
     }
 
+    /// 使用配置创建 HNSW 索引
+    pub fn with_config(_config: crate::config::HnswConfig, dimension: usize) -> Self {
+        Self {
+            hnsw: None,
+            vectors: Vec::new(),
+            id_to_index: HashMap::new(),
+            dimension: Some(dimension),
+        }
+    }
+
     /// 构建索引
     fn build_index(&mut self) -> Result<(), VectorDbError> {
         if self.vectors.is_empty() {
