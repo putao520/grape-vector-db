@@ -146,7 +146,7 @@ impl QueryEngine {
         for (doc_id, score) in sorted_results.into_iter().take(limit) {
             if let Some(doc) = store.get_document(&doc_id).await? {
                 let snippet = if let Some(query) = query_text {
-                    Some(vec![self.extract_snippet(&doc.content, query)])
+                    Some(vec![self.extract_snippet(&doc.content, Some(query))])
                 } else {
                     None
                 };

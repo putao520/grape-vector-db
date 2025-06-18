@@ -691,7 +691,10 @@ impl crate::storage::VectorStore for AdvancedStorage {
         let point = crate::types::Point {
             id: id.clone(),
             vector: document.vector.unwrap_or_default(),
-            payload: document.metadata.unwrap_or_default(),
+            payload: document.metadata
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
         };
 
         self.store_vector(&point)
@@ -720,7 +723,10 @@ impl crate::storage::VectorStore for AdvancedStorage {
                 embedding: point.vector.clone(),
                 package_name: "".to_string(),
                 doc_type: "".to_string(),
-                metadata: point.payload,
+                metadata: point.payload
+                    .into_iter()
+                    .map(|(k, v)| (k, v.to_string()))
+                    .collect(),
                 language: "".to_string(),
                 version: "".to_string(),
                 vector: Some(point.vector),
@@ -765,10 +771,11 @@ impl crate::storage::VectorStore for AdvancedStorage {
     async fn get_stats(&self) -> crate::errors::Result<crate::types::VectorDbStats> {
         let storage_stats = self.get_stats();
         Ok(crate::types::VectorDbStats {
-            total_documents: storage_stats.total_vectors as usize,
-            total_vectors: storage_stats.total_vectors as usize,
-            index_size_mb: storage_stats.total_size_mb,
-            last_update: chrono::Utc::now(),
+            total_documents: storage_stats.estimated_keys as usize,
+            total_vectors: storage_stats.estimated_keys as usize,
+            index_size_bytes: storage_stats.total_size,
+            memory_usage_bytes: storage_stats.live_data_size,
+            last_optimization: None,
         })
     }
 

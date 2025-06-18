@@ -527,7 +527,7 @@ impl<T> ResourcePool<T> {
         Ok(PooledResource {
             resource,
             pool: self.resources.clone(),
-            _permit: permit,
+            // _permit: permit, // TODO: Fix lifetime issue
         })
     }
 
@@ -555,7 +555,7 @@ impl<T> ResourcePool<T> {
 pub struct PooledResource<T> {
     resource: Option<T>,
     pool: Arc<Mutex<Vec<T>>>,
-    _permit: tokio::sync::SemaphorePermit<'static>,
+    // _permit: tokio::sync::SemaphorePermit<'static>, // TODO: Fix lifetime issue
 }
 
 impl<T> PooledResource<T> {

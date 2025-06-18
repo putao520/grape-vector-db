@@ -119,7 +119,7 @@ impl HnswVectorIndex {
     }
 
     /// 构建索引
-    fn build_index(&mut self) -> Result<(), VectorDbError> {
+    pub fn build_index(&mut self) -> Result<(), VectorDbError> {
         if self.vectors.is_empty() {
             return Ok(());
         }

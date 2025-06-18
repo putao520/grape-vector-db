@@ -361,7 +361,7 @@ impl EmbeddedVectorDB {
         // 1. 检查存储引擎
         let storage_check = {
             let start = Instant::now();
-            let stats = storage.get_stats();
+            let stats = storage.lock().get_stats();
             CheckResult {
                 name: "storage".to_string(),
                 status: CheckStatus::Healthy,
@@ -606,8 +606,8 @@ impl EmbeddedVectorDB {
         
         // 2. 检查查询引擎是否有活跃查询
         let query_stats = self.query_engine.get_index_stats();
-        if query_stats.vector_count > 0 {
-            tracing::debug!("检测到 {} 个向量在索引中", query_stats.vector_count);
+        if query_stats.point_count > 0 {
+            tracing::debug!("检测到 {} 个向量在索引中", query_stats.point_count);
             return true;
         }
         

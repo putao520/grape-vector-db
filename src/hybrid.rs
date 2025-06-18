@@ -691,8 +691,7 @@ impl HybridSearchEngine {
             // 根据查询特征调整权重
             let context = self.analyze_query_context(request);
             if let Some(model) = &self.fusion_model {
-                let model_guard = model.lock()
-                    .map_err(|_| VectorDbError::Other("Failed to acquire model lock".to_string()))?;
+                let model_guard = model.lock();
                 model_guard.predict_weights(
                     request.text_query.as_deref().unwrap_or(""),
                     &context
@@ -830,8 +829,7 @@ impl HybridSearchEngine {
         request: &HybridSearchRequest,
     ) -> Result<FusionWeights> {
         // 获取相似查询的历史性能
-        let history = self.query_history.lock()
-            .map_err(|_| VectorDbError::Other("Failed to acquire query history lock".to_string()))?;
+        let history = self.query_history.lock();
         let query_text = request.text_query.as_deref().unwrap_or("");
         
         // 找到相似的历史查询
@@ -883,7 +881,7 @@ impl HybridSearchEngine {
     pub fn record_query_metrics(&self, metrics: QueryMetrics) -> Result<()> {
         // 更新历史记录
         {
-            let mut history = self.query_history.lock().unwrap();
+            let mut history = self.query_history.lock();
             history.push(metrics.clone());
             
             // 限制历史记录大小
@@ -894,7 +892,7 @@ impl HybridSearchEngine {
 
         // 如果有学习模型，更新模型
         if let Some(model) = &self.fusion_model {
-            let mut model_guard = model.lock().unwrap();
+            let mut model_guard = model.lock();
             model_guard.update_model(&metrics)?;
         }
 
@@ -903,13 +901,13 @@ impl HybridSearchEngine {
 
     /// 获取性能统计
     pub fn get_performance_stats(&self) -> HashMap<String, FusionPerformanceStats> {
-        self.performance_stats.lock().unwrap().clone()
+        self.performance_stats.lock().clone()
     }
 
     /// 计算缓存命中率
     fn calculate_cache_hit_rate(&self) -> f64 {
         // 基于查询历史计算缓存命中率
-        let history = self.query_history.lock().unwrap();
+        let history = self.query_history.lock();
         if history.is_empty() {
             return 0.0;
         }
@@ -935,8 +933,8 @@ impl HybridSearchEngine {
             document_count: sparse_stats.total_documents,
             dense_vector_count: dense_stats.vector_count,
             sparse_vector_count: sparse_stats.total_documents,
-            memory_usage_mb: (dense_stats.memory_usage + self.sparse_engine.get_memory_usage_mb() * 1024 * 1024) / (1024 * 1024),
-            dense_index_size_mb: dense_stats.memory_usage / (1024 * 1024),
+            memory_usage_mb: (dense_stats.memory_usage as f64 / (1024.0 * 1024.0)) + self.sparse_engine.get_memory_usage_mb(),
+            dense_index_size_mb: dense_stats.memory_usage as f64 / (1024.0 * 1024.0),
             sparse_index_size_mb: self.sparse_engine.get_memory_usage_mb(),
             cache_hit_rate: self.calculate_cache_hit_rate(),
             bm25_stats: Some(sparse_stats),
