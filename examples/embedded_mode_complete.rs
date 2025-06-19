@@ -46,7 +46,7 @@ async fn basic_usage_example() -> Result<(), Box<dyn std::error::Error>> {
         .with_memory_limit_mb(256);
 
     // 2. 初始化数据库
-    let mut db = EmbeddedVectorDB::new(config).await?;
+    let mut db = EmbeddedVectorDB::new_blocking(config)?;
     info!("数据库初始化完成");
 
     // 3. 添加一些向量数据
@@ -141,7 +141,7 @@ async fn advanced_configuration_example() -> Result<(), Box<dyn std::error::Erro
     };
 
     let start_time = Instant::now();
-    let mut db = EmbeddedVectorDB::new(config).await?;
+    let mut db = EmbeddedVectorDB::new_blocking(config)?;
     let init_time = start_time.elapsed();
     
     info!("高级配置数据库初始化耗时: {:?}", init_time);
@@ -433,7 +433,7 @@ async fn lifecycle_management_example() -> Result<(), Box<dyn std::error::Error>
 
     // 1. 正常启动
     info!("正常启动数据库...");
-    let mut db = EmbeddedVectorDB::new(config.clone()).await?;
+    let mut db = EmbeddedVectorDB::new_blocking(config.clone())?;
     
     // 检查状态
     let state = db.get_state().await;
@@ -495,7 +495,7 @@ async fn lifecycle_management_example() -> Result<(), Box<dyn std::error::Error>
 
     // 7. 重新启动并验证数据持久性
     info!("重新启动数据库验证持久性...");
-    let db2 = EmbeddedVectorDB::new(config).await?;
+    let db2 = EmbeddedVectorDB::new_blocking(config)?;
     
     let stats = db2.get_stats().await?;
     info!("重启后数据库统计: {} 个文档", stats.document_count);
