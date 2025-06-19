@@ -5,9 +5,32 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::distributed::load_balancer::{IntelligentLoadBalancer, RouteResult};
+use crate::distributed::load_balancer::{IntelligentLoadBalancer, LoadBalancerError};
 use crate::distributed::network_client::DistributedNetworkClient;
 use crate::types::*;
+use thiserror::Error;
+
+/// 请求路由错误类型
+#[derive(Error, Debug)]
+pub enum RequestRouterError {
+    #[error("负载均衡器错误: {0}")]
+    LoadBalancer(#[from] LoadBalancerError),
+    
+    #[error("网络错误: {0}")]
+    Network(#[from] VectorDbError),
+    
+    #[error("缓存错误: {0}")]
+    Cache(String),
+    
+    #[error("配置错误: {0}")]
+    Configuration(String),
+    
+    #[error("超时错误: 请求在 {timeout_ms}ms 内未完成")]
+    Timeout { timeout_ms: u64 },
+    
+    #[error("所有节点都不可用")]
+    AllNodesUnavailable,
+}
 
 /// 请求类型枚举
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,8 +121,10 @@ pub struct ClusterAwareRequestRouter {
     config: RoutingConfig,
     /// 节点连接池
     connection_pools: Arc<RwLock<HashMap<NodeId, Arc<ConnectionPool>>>>,
-    /// 请求缓存
-    request_cache: Arc<RwLock<HashMap<String, CachedResponse>>>,
+    /// 搜索请求缓存
+    search_cache: TypedCache<GrpcSearchResponse>,
+    /// 插入请求缓存
+    insert_cache: TypedCache<String>,
     /// 路由性能统计
     routing_metrics: Arc<RwLock<RoutingMetrics>>,
 }
@@ -119,13 +144,64 @@ pub struct ConnectionPool {
 
 /// 缓存响应
 #[derive(Debug, Clone)]
-pub struct CachedResponse {
+pub struct CachedResponse<T> {
     /// 响应数据
-    pub data: Vec<u8>,
+    pub data: T,
     /// 缓存时间
     pub cached_at: Instant,
     /// TTL
     pub ttl: Duration,
+}
+
+/// 类型化的缓存存储
+pub struct TypedCache<T> {
+    /// 缓存存储
+    storage: Arc<RwLock<HashMap<String, CachedResponse<T>>>>,
+    /// 默认TTL
+    default_ttl: Duration,
+}
+
+impl<T: Clone> TypedCache<T> {
+    pub fn new(default_ttl: Duration) -> Self {
+        Self {
+            storage: Arc::new(RwLock::new(HashMap::new())),
+            default_ttl,
+        }
+    }
+
+    pub async fn get(&self, key: &str) -> Option<T> {
+        let storage = self.storage.read().await;
+        if let Some(cached) = storage.get(key) {
+            if cached.cached_at.elapsed() < cached.ttl {
+                return Some(cached.data.clone());
+            }
+        }
+        None
+    }
+
+    pub async fn set(&self, key: String, value: T) {
+        self.set_with_ttl(key, value, self.default_ttl).await;
+    }
+
+    pub async fn set_with_ttl(&self, key: String, value: T, ttl: Duration) {
+        let mut storage = self.storage.write().await;
+        storage.insert(key, CachedResponse {
+            data: value,
+            cached_at: Instant::now(),
+            ttl,
+        });
+    }
+
+    pub async fn remove(&self, key: &str) {
+        let mut storage = self.storage.write().await;
+        storage.remove(key);
+    }
+
+    pub async fn clear_expired(&self) {
+        let mut storage = self.storage.write().await;
+        let now = Instant::now();
+        storage.retain(|_, cached| now.duration_since(cached.cached_at) < cached.ttl);
+    }
 }
 
 /// 路由性能指标
@@ -155,15 +231,50 @@ impl ClusterAwareRequestRouter {
         load_balancer: Arc<IntelligentLoadBalancer>,
         network_client: Arc<DistributedNetworkClient>,
         config: RoutingConfig,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, RequestRouterError> {
+        // 配置验证
+        Self::validate_config(&config)?;
+
+        let cache_ttl = Duration::from_secs(config.cache_ttl_secs);
+        
+        Ok(Self {
             load_balancer,
             network_client,
             config,
             connection_pools: Arc::new(RwLock::new(HashMap::new())),
-            request_cache: Arc::new(RwLock::new(HashMap::new())),
+            search_cache: TypedCache::new(cache_ttl),
+            insert_cache: TypedCache::new(cache_ttl),
             routing_metrics: Arc::new(RwLock::new(RoutingMetrics::default())),
+        })
+    }
+
+    /// 验证配置
+    fn validate_config(config: &RoutingConfig) -> Result<(), RequestRouterError> {
+        if config.max_retries > 10 {
+            return Err(RequestRouterError::Configuration(
+                "最大重试次数不能超过10".to_string()
+            ));
         }
+
+        if config.request_timeout_ms > 300_000 {
+            return Err(RequestRouterError::Configuration(
+                "请求超时不能超过5分钟".to_string()
+            ));
+        }
+
+        if config.connection_pool_size == 0 || config.connection_pool_size > 1000 {
+            return Err(RequestRouterError::Configuration(
+                "连接池大小必须在1-1000范围内".to_string()
+            ));
+        }
+
+        if config.cache_ttl_secs > 86400 {
+            return Err(RequestRouterError::Configuration(
+                "缓存TTL不能超过24小时".to_string()
+            ));
+        }
+
+        Ok(())
     }
 
     /// 执行向量搜索请求
@@ -171,16 +282,48 @@ impl ClusterAwareRequestRouter {
         &self,
         search_request: SearchRequest,
         route_info: RequestRouteInfo,
-    ) -> Result<RouteExecutionResult<GrpcSearchResponse>, VectorDbError> {
-        self.execute_request_with_routing(
-            route_info,
+    ) -> Result<RouteExecutionResult<GrpcSearchResponse>, RequestRouterError> {
+        // 参数验证
+        if search_request.vector.is_empty() {
+            return Err(RequestRouterError::Configuration(
+                "搜索向量不能为空".to_string()
+            ));
+        }
+
+        // 检查缓存
+        if self.config.enable_request_cache {
+            if let Some(cached_response) = self.search_cache.get(&route_info.request_id).await {
+                info!("搜索请求 {} 命中缓存", route_info.request_id);
+                self.update_cache_metrics(true).await;
+                return Ok(RouteExecutionResult {
+                    response: cached_response,
+                    executed_node: "cache".to_string(),
+                    execution_time_ms: 0,
+                    used_failover: false,
+                    retry_count: 0,
+                });
+            }
+        }
+
+        self.update_cache_metrics(false).await;
+
+        // 执行请求
+        let result = self.execute_request_with_routing(
+            route_info.clone(),
             |node_id| async move {
                 self.network_client
                     .send_search_request(&node_id, &search_request)
                     .await
-                    .map_err(|e| VectorDbError::NetworkError(e.to_string()))
+                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
             },
-        ).await
+        ).await?;
+
+        // 缓存结果
+        if self.config.enable_request_cache && result.retry_count == 0 {
+            self.search_cache.set(route_info.request_id, result.response.clone()).await;
+        }
+
+        Ok(result)
     }
 
     /// 执行文档插入请求
@@ -188,16 +331,31 @@ impl ClusterAwareRequestRouter {
         &self,
         document: Document,
         route_info: RequestRouteInfo,
-    ) -> Result<RouteExecutionResult<String>, VectorDbError> {
-        self.execute_request_with_routing(
-            route_info,
+    ) -> Result<RouteExecutionResult<String>, RequestRouterError> {
+        // 参数验证
+        if document.id.trim().is_empty() {
+            return Err(RequestRouterError::Configuration(
+                "文档ID不能为空".to_string()
+            ));
+        }
+
+        // 执行请求
+        let result = self.execute_request_with_routing(
+            route_info.clone(),
             |node_id| async move {
                 self.network_client
                     .send_insert_request(&node_id, &document)
                     .await
-                    .map_err(|e| VectorDbError::NetworkError(e.to_string()))
+                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
             },
-        ).await
+        ).await?;
+
+        // 缓存插入结果（如果成功且没有重试）
+        if self.config.enable_request_cache && result.retry_count == 0 {
+            self.insert_cache.set(route_info.request_id, result.response.clone()).await;
+        }
+
+        Ok(result)
     }
 
     /// 执行批量文档插入
@@ -205,14 +363,36 @@ impl ClusterAwareRequestRouter {
         &self,
         documents: Vec<Document>,
         route_info: RequestRouteInfo,
-    ) -> Result<RouteExecutionResult<Vec<String>>, VectorDbError> {
+    ) -> Result<RouteExecutionResult<Vec<String>>, RequestRouterError> {
+        // 参数验证
+        if documents.is_empty() {
+            return Err(RequestRouterError::Configuration(
+                "文档列表不能为空".to_string()
+            ));
+        }
+
+        if documents.len() > 1000 {
+            return Err(RequestRouterError::Configuration(
+                "批量插入文档数量不能超过1000".to_string()
+            ));
+        }
+
+        for doc in &documents {
+            if doc.id.trim().is_empty() {
+                return Err(RequestRouterError::Configuration(
+                    "批量插入中包含空文档ID".to_string()
+                ));
+            }
+        }
+
+        // 执行请求
         self.execute_request_with_routing(
             route_info,
             |node_id| async move {
                 self.network_client
                     .send_batch_insert_request(&node_id, &documents)
                     .await
-                    .map_err(|e| VectorDbError::NetworkError(e.to_string()))
+                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
             },
         ).await
     }
@@ -222,32 +402,20 @@ impl ClusterAwareRequestRouter {
         &self,
         route_info: RequestRouteInfo,
         request_fn: F,
-    ) -> Result<RouteExecutionResult<T>, VectorDbError>
+    ) -> Result<RouteExecutionResult<T>, RequestRouterError>
     where
         F: Fn(NodeId) -> Fut,
-        Fut: std::future::Future<Output = Result<T, VectorDbError>>,
+        Fut: std::future::Future<Output = Result<T, RequestRouterError>>,
+        T: Clone,
     {
         let start_time = Instant::now();
         let mut retry_count = 0;
         let mut used_failover = false;
 
-        // 检查缓存
-        if self.config.enable_request_cache {
-            if let Some(cached) = self.check_cache(&route_info.request_id).await {
-                // 如果支持类型转换，返回缓存结果
-                info!("请求 {} 命中缓存", route_info.request_id);
-                self.update_cache_metrics(true).await;
-                // 注意：这里简化处理，实际实现需要处理类型转换
-            }
-        }
-
-        self.update_cache_metrics(false).await;
-
         // 获取路由结果
         let route_result = self.load_balancer
             .route_request(&format!("{:?}", route_info.request_type))
-            .await
-            .ok_or_else(|| VectorDbError::NetworkError("没有可用的健康节点".to_string()))?;
+            .await?;
 
         let mut target_nodes = vec![route_result.target_node];
         target_nodes.extend(route_result.backup_nodes);
@@ -258,6 +426,10 @@ impl ClusterAwareRequestRouter {
                 used_failover = true;
                 retry_count += 1;
                 warn!("故障转移到节点: {}, 重试次数: {}", node_id, retry_count);
+
+                if retry_count > self.config.max_retries {
+                    break;
+                }
             }
 
             // 检查连接池
@@ -271,9 +443,11 @@ impl ClusterAwareRequestRouter {
                     let execution_time_ms = start_time.elapsed().as_millis() as u64;
                     
                     // 更新节点性能指标
-                    self.load_balancer
+                    if let Err(e) = self.load_balancer
                         .update_node_health(node_id, true, execution_time_ms as f64)
-                        .await;
+                        .await {
+                        warn!("更新节点健康状态失败: {}", e);
+                    }
 
                     // 更新路由指标
                     self.update_routing_metrics(node_id, execution_time_ms, true, used_failover, retry_count).await;
@@ -290,24 +464,20 @@ impl ClusterAwareRequestRouter {
                     error!("节点 {} 请求执行失败: {}", node_id, e);
                     
                     // 更新节点健康状态
-                    self.load_balancer
+                    if let Err(update_err) = self.load_balancer
                         .update_node_health(node_id, false, 999999.0)
-                        .await;
-
-                    if retry_count >= self.config.max_retries {
-                        break;
+                        .await {
+                        warn!("更新节点健康状态失败: {}", update_err);
                     }
                 },
                 Err(_) => {
                     error!("节点 {} 请求超时", node_id);
                     
                     // 更新节点健康状态
-                    self.load_balancer
+                    if let Err(e) = self.load_balancer
                         .update_node_health(node_id, false, self.config.request_timeout_ms as f64)
-                        .await;
-
-                    if retry_count >= self.config.max_retries {
-                        break;
+                        .await {
+                        warn!("更新节点健康状态失败: {}", e);
                     }
                 }
             }
@@ -317,9 +487,7 @@ impl ClusterAwareRequestRouter {
         let execution_time_ms = start_time.elapsed().as_millis() as u64;
         self.update_routing_metrics(&target_nodes[0], execution_time_ms, false, used_failover, retry_count).await;
         
-        Err(VectorDbError::NetworkError(
-            "所有节点都不可用".to_string()
-        ))
+        Err(RequestRouterError::AllNodesUnavailable)
     }
 
     /// 确保节点有连接池
@@ -337,15 +505,68 @@ impl ClusterAwareRequestRouter {
         }
     }
 
-    /// 检查请求缓存
-    async fn check_cache(&self, request_id: &str) -> Option<CachedResponse> {
-        let cache = self.request_cache.read().await;
-        if let Some(cached) = cache.get(request_id) {
-            if cached.cached_at.elapsed() < cached.ttl {
-                return Some(cached.clone());
+    /// 启动后台维护任务
+    pub async fn start_background_tasks(&self) -> Result<(), RequestRouterError> {
+        // 启动连接池清理任务
+        let pools = self.connection_pools.clone();
+        let pool_cleanup_interval = Duration::from_secs(300); // 5分钟清理一次
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(pool_cleanup_interval);
+            
+            loop {
+                interval.tick().await;
+                
+                let mut pools_write = pools.write().await;
+                let now = Instant::now();
+                
+                // 清理超过10分钟未使用的连接池
+                pools_write.retain(|node_id, pool| {
+                    if now.duration_since(pool.last_used) > Duration::from_secs(600) {
+                        debug!("清理节点 {} 的连接池", node_id);
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
+        });
+
+        // 启动缓存清理任务
+        if self.config.enable_request_cache {
+            let search_cache = self.search_cache.storage.clone();
+            let insert_cache = self.insert_cache.storage.clone();
+            let cache_cleanup_interval = Duration::from_secs(60); // 每分钟清理一次过期缓存
+            
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(cache_cleanup_interval);
+                
+                loop {
+                    interval.tick().await;
+                    
+                    // 清理搜索缓存
+                    {
+                        let mut cache_write = search_cache.write().await;
+                        let now = Instant::now();
+                        cache_write.retain(|_, cached| {
+                            now.duration_since(cached.cached_at) < cached.ttl
+                        });
+                    }
+                    
+                    // 清理插入缓存
+                    {
+                        let mut cache_write = insert_cache.write().await;
+                        let now = Instant::now();
+                        cache_write.retain(|_, cached| {
+                            now.duration_since(cached.cached_at) < cached.ttl
+                        });
+                    }
+                }
+            });
         }
-        None
+
+        info!("请求路由器后台任务已启动");
+        Ok(())
     }
 
     /// 更新缓存指标
@@ -425,7 +646,6 @@ impl ClusterAwareRequestRouter {
     /// 获取负载均衡状态
     pub async fn get_load_balance_status(&self) -> LoadBalanceStatus {
         let balance_report = self.load_balancer.check_load_balance().await;
-        let routing_stats = self.load_balancer.get_routing_stats().await;
 
         LoadBalanceStatus {
             is_balanced: balance_report.is_balanced,
@@ -434,58 +654,6 @@ impl ClusterAwareRequestRouter {
             node_distributions: balance_report.node_distributions,
             routing_strategy: "智能负载均衡".to_string(),
         }
-    }
-
-    /// 启动后台维护任务
-    pub async fn start_background_tasks(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // 启动连接池清理任务
-        let pools = self.connection_pools.clone();
-        let pool_cleanup_interval = Duration::from_secs(300); // 5分钟清理一次
-        
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(pool_cleanup_interval);
-            
-            loop {
-                interval.tick().await;
-                
-                let mut pools_write = pools.write().await;
-                let now = Instant::now();
-                
-                // 清理超过10分钟未使用的连接池
-                pools_write.retain(|node_id, pool| {
-                    if now.duration_since(pool.last_used) > Duration::from_secs(600) {
-                        debug!("清理节点 {} 的连接池", node_id);
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-        });
-
-        // 启动缓存清理任务
-        if self.config.enable_request_cache {
-            let cache = self.request_cache.clone();
-            let cache_cleanup_interval = Duration::from_secs(60); // 每分钟清理一次过期缓存
-            
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(cache_cleanup_interval);
-                
-                loop {
-                    interval.tick().await;
-                    
-                    let mut cache_write = cache.write().await;
-                    let now = Instant::now();
-                    
-                    cache_write.retain(|_, cached| {
-                        now.duration_since(cached.cached_at) < cached.ttl
-                    });
-                }
-            });
-        }
-
-        info!("请求路由器后台任务已启动");
-        Ok(())
     }
 }
 

@@ -6,9 +6,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::distributed::{
     ClusterManager, IntelligentLoadBalancer, LoadBalancerConfig, ClusterAwareRequestRouter,
-    RoutingConfig, DistributedNetworkClient
+    RoutingConfig, DistributedNetworkClient, LoadBalancerError
 };
 use crate::types::*;
+use thiserror::Error;
+
+/// 集群服务错误类型
+#[derive(Error, Debug)]
+pub enum ClusterServiceError {
+    #[error("配置错误: {0}")]
+    Configuration(String),
+    
+    #[error("负载均衡器错误: {0}")]
+    LoadBalancer(#[from] LoadBalancerError),
+    
+    #[error("集群管理错误: {0}")]
+    ClusterManagement(String),
+    
+    #[error("网络错误: {0}")]
+    Network(String),
+    
+    #[error("存储错误: {0}")]
+    Storage(#[from] VectorDbError),
+    
+    #[error("服务未启动")]
+    ServiceNotStarted,
+}
 
 /// 集群服务配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,15 +125,18 @@ impl ClusterService {
     pub async fn new(
         config: ClusterServiceConfig,
         storage: Arc<crate::advanced_storage::AdvancedStorage>,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Self, ClusterServiceError> {
         info!("正在初始化集群服务...");
+
+        // 配置验证
+        Self::validate_config(&config)?;
 
         // 创建集群管理器
         let cluster_manager = Arc::new(ClusterManager::new(
             config.cluster_config.clone(),
             config.local_node.clone(),
             storage,
-        )?);
+        ).map_err(|e| ClusterServiceError::ClusterManagement(e.to_string()))?);
 
         // 创建网络客户端
         let network_client = Arc::new(DistributedNetworkClient::with_node_id(
@@ -119,12 +145,12 @@ impl ClusterService {
 
         // 根据配置创建负载均衡器和路由器
         let (load_balancer, request_router) = if config.enable_builtin_load_balancer {
-            let lb = Arc::new(IntelligentLoadBalancer::new(config.load_balancer_config.clone()));
+            let lb = Arc::new(IntelligentLoadBalancer::new(config.load_balancer_config.clone())?);
             let router = Arc::new(ClusterAwareRequestRouter::new(
                 lb.clone(),
                 network_client.clone(),
                 config.routing_config.clone(),
-            ));
+            ).map_err(|e| ClusterServiceError::Configuration(e.to_string()))?);
             (Some(lb), Some(router))
         } else {
             (None, None)
@@ -150,29 +176,77 @@ impl ClusterService {
         })
     }
 
+    /// 验证配置
+    fn validate_config(config: &ClusterServiceConfig) -> Result<(), ClusterServiceError> {
+        // 验证本地节点信息
+        if config.local_node.id.trim().is_empty() {
+            return Err(ClusterServiceError::Configuration(
+                "本地节点ID不能为空".to_string()
+            ));
+        }
+
+        if config.local_node.address.trim().is_empty() {
+            return Err(ClusterServiceError::Configuration(
+                "本地节点地址不能为空".to_string()
+            ));
+        }
+
+        if config.local_node.port == 0 || config.local_node.port > 65535 {
+            return Err(ClusterServiceError::Configuration(
+                format!("本地节点端口无效: {}", config.local_node.port)
+            ));
+        }
+
+        // 验证服务发现配置
+        if config.service_discovery_config.enable_auto_discovery {
+            for seed_node in &config.service_discovery_config.seed_nodes {
+                if !Self::is_valid_node_address(seed_node) {
+                    return Err(ClusterServiceError::Configuration(
+                        format!("无效的种子节点地址: {}", seed_node)
+                    ));
+                }
+            }
+
+            if config.service_discovery_config.discovery_interval_secs == 0 
+                || config.service_discovery_config.discovery_interval_secs > 3600 {
+                return Err(ClusterServiceError::Configuration(
+                    "发现间隔必须在1秒-1小时范围内".to_string()
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// 启动集群服务
-    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&self) -> Result<(), ClusterServiceError> {
         info!("启动集群服务...");
 
         // 启动集群管理器
-        self.cluster_manager.start().await?;
+        self.cluster_manager.start().await
+            .map_err(|e| ClusterServiceError::ClusterManagement(e.to_string()))?;
 
         // 启动负载均衡器后台服务
         if let Some(ref load_balancer) = self.load_balancer {
-            load_balancer.start_background_services().await?;
+            load_balancer.start_background_services().await
+                .map_err(|e| ClusterServiceError::LoadBalancer(
+                    crate::distributed::LoadBalancerError::InternalError(e.to_string())
+                ))?;
             
             // 将本地节点添加到负载均衡器
-            load_balancer.add_node(self.config.local_node.id.clone(), 1.0).await;
+            load_balancer.add_node(self.config.local_node.id.clone(), 1.0).await?;
         }
 
         // 启动请求路由器后台服务
         if let Some(ref request_router) = self.request_router {
-            request_router.start_background_tasks().await?;
+            request_router.start_background_tasks().await
+                .map_err(|e| ClusterServiceError::Configuration(e.to_string()))?;
         }
 
         // 启动服务发现
         if self.config.service_discovery_config.enable_auto_discovery {
-            self.start_service_discovery().await?;
+            self.start_service_discovery().await
+                .map_err(|e| ClusterServiceError::Network(e.to_string()))?;
         }
 
         // 更新状态
@@ -187,11 +261,12 @@ impl ClusterService {
     }
 
     /// 停止集群服务
-    pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn stop(&self) -> Result<(), ClusterServiceError> {
         info!("停止集群服务...");
 
         // 从集群中优雅退出
-        self.cluster_manager.leave_cluster(false).await?;
+        self.cluster_manager.leave_cluster(false).await
+            .map_err(|e| ClusterServiceError::ClusterManagement(e.to_string()))?;
 
         // 更新状态
         {
@@ -220,13 +295,33 @@ impl ClusterService {
     }
 
     /// 添加节点到集群
-    pub async fn add_node(&self, node: NodeInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn add_node(&self, node: NodeInfo) -> Result<(), ClusterServiceError> {
+        // 参数验证
+        if node.id.trim().is_empty() {
+            return Err(ClusterServiceError::Configuration(
+                "节点ID不能为空".to_string()
+            ));
+        }
+
+        if node.address.trim().is_empty() {
+            return Err(ClusterServiceError::Configuration(
+                "节点地址不能为空".to_string()
+            ));
+        }
+
+        if node.port == 0 || node.port > 65535 {
+            return Err(ClusterServiceError::Configuration(
+                format!("节点端口无效: {}", node.port)
+            ));
+        }
+
         // 添加到集群管理器
-        self.cluster_manager.add_node(node.clone()).await?;
+        self.cluster_manager.add_node(node.clone()).await
+            .map_err(|e| ClusterServiceError::ClusterManagement(e.to_string()))?;
 
         // 添加到负载均衡器
         if let Some(ref load_balancer) = self.load_balancer {
-            load_balancer.add_node(node.id.clone(), 1.0).await;
+            load_balancer.add_node(node.id.clone(), 1.0).await?;
         }
 
         // 更新状态
@@ -237,9 +332,17 @@ impl ClusterService {
     }
 
     /// 移除节点
-    pub async fn remove_node(&self, node_id: &NodeId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn remove_node(&self, node_id: &NodeId) -> Result<(), ClusterServiceError> {
+        // 参数验证
+        if node_id.trim().is_empty() {
+            return Err(ClusterServiceError::Configuration(
+                "节点ID不能为空".to_string()
+            ));
+        }
+
         // 从集群管理器移除
-        self.cluster_manager.remove_node(node_id).await?;
+        self.cluster_manager.remove_node(node_id).await
+            .map_err(|e| ClusterServiceError::ClusterManagement(e.to_string()))?;
 
         // 从负载均衡器移除
         if let Some(ref load_balancer) = self.load_balancer {
@@ -259,7 +362,7 @@ impl ClusterService {
     }
 
     /// 获取详细的集群健康状态
-    pub async fn get_cluster_health(&self) -> Result<crate::distributed::ClusterHealthStatus, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn get_cluster_health(&self) -> Result<crate::distributed::ClusterHealthStatus, ClusterServiceError> {
         if let Some(ref request_router) = self.request_router {
             Ok(request_router.get_cluster_health().await)
         } else {
@@ -268,7 +371,14 @@ impl ClusterService {
                 total_nodes: 1,
                 healthy_nodes: 1,
                 health_percentage: 100.0,
-                node_details: vec![],
+                node_details: vec![crate::distributed::NodeHealthDetail {
+                    node_id: self.config.local_node.id.clone(),
+                    is_healthy: true,
+                    avg_response_time_ms: 0.0,
+                    current_connections: 0,
+                    weight: 1.0,
+                    last_updated_timestamp: chrono::Utc::now().timestamp(),
+                }],
             })
         }
     }
@@ -288,7 +398,7 @@ impl ClusterService {
     }
 
     /// 启动服务发现
-    async fn start_service_discovery(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn start_service_discovery(&self) -> Result<(), ClusterServiceError> {
         if self.config.service_discovery_config.seed_nodes.is_empty() {
             warn!("未配置种子节点，跳过服务发现");
             return Ok(());
@@ -301,28 +411,54 @@ impl ClusterService {
 
         tokio::spawn(async move {
             let mut discovery_interval = tokio::time::interval(Duration::from_secs(config.discovery_interval_secs));
+            let mut consecutive_failures = HashMap::new();
             
             loop {
                 discovery_interval.tick().await;
                 
                 for seed_node in &config.seed_nodes {
+                    // 验证种子节点格式
+                    if !Self::is_valid_node_address(seed_node) {
+                        warn!("无效的种子节点地址格式: {}", seed_node);
+                        continue;
+                    }
+
                     // 尝试连接种子节点并发现其他节点
                     match network_client.send_health_check(&seed_node.clone(), seed_node).await {
                         Ok(_) => {
                             info!("发现健康的种子节点: {}", seed_node);
                             
+                            // 重置连续失败计数
+                            consecutive_failures.insert(seed_node.clone(), 0);
+                            
                             // 如果有负载均衡器，添加到负载均衡器
                             if let Some(ref lb) = load_balancer {
-                                lb.add_node(seed_node.clone(), 1.0).await;
+                                if let Err(e) = lb.add_node(seed_node.clone(), 1.0).await {
+                                    debug!("节点已存在于负载均衡器: {} - {}", seed_node, e);
+                                }
                             }
                             
-                            // 尝试加入集群 (简化实现)
+                            // 尝试加入集群
                             if let Err(e) = cluster_manager.join_cluster(seed_node).await {
                                 warn!("加入集群失败，种子节点: {}, 错误: {}", seed_node, e);
                             }
                         },
                         Err(e) => {
-                            warn!("种子节点不可达: {}, 错误: {}", seed_node, e);
+                            let failure_count = consecutive_failures.entry(seed_node.clone()).or_insert(0);
+                            *failure_count += 1;
+                            
+                            if *failure_count <= 3 {
+                                warn!("种子节点不可达: {}, 连续失败 {} 次, 错误: {}", seed_node, failure_count, e);
+                            } else {
+                                debug!("种子节点持续不可达: {}, 连续失败 {} 次", seed_node, failure_count);
+                            }
+                            
+                            // 如果连续失败超过阈值，从负载均衡器移除
+                            if *failure_count > 5 {
+                                if let Some(ref lb) = load_balancer {
+                                    lb.remove_node(seed_node).await;
+                                }
+                            }
                         }
                     }
                 }
@@ -331,6 +467,26 @@ impl ClusterService {
 
         info!("服务发现已启动，种子节点: {:?}", config.seed_nodes);
         Ok(())
+    }
+
+    /// 验证节点地址格式
+    fn is_valid_node_address(address: &str) -> bool {
+        // 基本格式验证：host:port
+        if let Some(colon_pos) = address.rfind(':') {
+            let host = &address[..colon_pos];
+            let port_str = &address[colon_pos + 1..];
+            
+            // 检查主机名不为空
+            if host.is_empty() {
+                return false;
+            }
+            
+            // 检查端口是否有效
+            if let Ok(port) = port_str.parse::<u16>() {
+                return port > 0 && port < 65536;
+            }
+        }
+        false
     }
 
     /// 更新集群状态

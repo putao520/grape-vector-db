@@ -6,6 +6,29 @@ use tracing::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::types::*;
+use thiserror::Error;
+
+/// 负载均衡器错误类型
+#[derive(Error, Debug)]
+pub enum LoadBalancerError {
+    #[error("无效参数: {0}")]
+    InvalidParameter(String),
+    
+    #[error("节点已存在: {0}")]
+    NodeAlreadyExists(NodeId),
+    
+    #[error("节点不存在: {0}")]
+    NodeNotFound(NodeId),
+    
+    #[error("没有可用的健康节点")]
+    NoHealthyNodes,
+    
+    #[error("负载均衡器配置错误: {0}")]
+    ConfigurationError(String),
+    
+    #[error("内部错误: {0}")]
+    InternalError(String),
+}
 
 /// 负载均衡策略
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +60,21 @@ pub struct NodeWeight {
     pub is_healthy: bool,
     /// 最后更新时间
     pub last_updated: Instant,
+    /// 地理位置信息 (可选)
+    pub location: Option<NodeLocation>,
+}
+
+/// 节点地理位置信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeLocation {
+    /// 数据中心名称
+    pub datacenter: String,
+    /// 区域名称
+    pub region: String,
+    /// 可用区
+    pub availability_zone: String,
+    /// 延迟等级 (1-5, 1最优)
+    pub latency_tier: u8,
 }
 
 /// 负载均衡器配置
@@ -94,30 +132,110 @@ pub struct IntelligentLoadBalancer {
 
 impl IntelligentLoadBalancer {
     /// 创建新的负载均衡器
-    pub fn new(config: LoadBalancerConfig) -> Self {
-        Self {
+    pub fn new(config: LoadBalancerConfig) -> Result<Self, LoadBalancerError> {
+        // 配置验证
+        Self::validate_config(&config)?;
+        
+        Ok(Self {
             config,
             node_weights: Arc::new(RwLock::new(HashMap::new())),
             round_robin_counter: Arc::new(RwLock::new(0)),
             routing_stats: Arc::new(RwLock::new(HashMap::new())),
+        })
+    }
+
+    /// 验证配置
+    fn validate_config(config: &LoadBalancerConfig) -> Result<(), LoadBalancerError> {
+        if config.health_check_interval_secs == 0 {
+            return Err(LoadBalancerError::ConfigurationError(
+                "健康检查间隔不能为0".to_string()
+            ));
         }
+
+        if config.health_check_interval_secs > 3600 {
+            return Err(LoadBalancerError::ConfigurationError(
+                "健康检查间隔不能超过1小时".to_string()
+            ));
+        }
+
+        if config.unhealthy_threshold_ms > 60_000 {
+            return Err(LoadBalancerError::ConfigurationError(
+                "不健康阈值不能超过60秒".to_string()
+            ));
+        }
+
+        if config.max_retries > 10 {
+            return Err(LoadBalancerError::ConfigurationError(
+                "最大重试次数不能超过10次".to_string()
+            ));
+        }
+
+        if config.failover_timeout_ms > 30_000 {
+            return Err(LoadBalancerError::ConfigurationError(
+                "故障转移超时不能超过30秒".to_string()
+            ));
+        }
+
+        Ok(())
     }
 
     /// 添加节点
-    pub async fn add_node(&self, node_id: NodeId, initial_weight: f64) {
+    pub async fn add_node(&self, node_id: NodeId, initial_weight: f64) -> Result<(), LoadBalancerError> {
+        self.add_node_with_location(node_id, initial_weight, None).await
+    }
+
+    /// 添加带位置信息的节点
+    pub async fn add_node_with_location(&self, node_id: NodeId, initial_weight: f64, location: Option<NodeLocation>) -> Result<(), LoadBalancerError> {
+        // 参数验证
+        if node_id.trim().is_empty() {
+            return Err(LoadBalancerError::InvalidParameter(
+                "节点ID不能为空".to_string()
+            ));
+        }
+
+        if !(0.0..=1.0).contains(&initial_weight) {
+            return Err(LoadBalancerError::InvalidParameter(
+                format!("权重必须在0.0-1.0范围内，当前值: {}", initial_weight)
+            ));
+        }
+
+        // 验证位置信息
+        if let Some(ref loc) = location {
+            if loc.datacenter.trim().is_empty() || loc.region.trim().is_empty() {
+                return Err(LoadBalancerError::InvalidParameter(
+                    "数据中心和区域名称不能为空".to_string()
+                ));
+            }
+            if !(1..=5).contains(&loc.latency_tier) {
+                return Err(LoadBalancerError::InvalidParameter(
+                    format!("延迟等级必须在1-5范围内，当前值: {}", loc.latency_tier)
+                ));
+            }
+        }
+
         let weight = NodeWeight {
             node_id: node_id.clone(),
-            weight: initial_weight.clamp(0.0, 1.0),
+            weight: initial_weight,
             current_connections: 0,
-            avg_response_time_ms: 50.0, // 默认响应时间
+            avg_response_time_ms: 50.0,
             is_healthy: true,
             last_updated: Instant::now(),
+            location,
         };
 
         let mut weights = self.node_weights.write().await;
+        
+        // 检查节点是否已存在
+        if weights.contains_key(&node_id) {
+            return Err(LoadBalancerError::NodeAlreadyExists(node_id));
+        }
+        
         weights.insert(node_id.clone(), weight);
         
-        info!("添加节点到负载均衡器: {}, 权重: {:.2}", node_id, initial_weight);
+        info!("添加节点到负载均衡器: {}, 权重: {:.2}, 位置: {:?}", 
+              node_id, initial_weight, location);
+        
+        Ok(())
     }
 
     /// 移除节点
@@ -129,26 +247,42 @@ impl IntelligentLoadBalancer {
     }
 
     /// 更新节点健康状态
-    pub async fn update_node_health(&self, node_id: &NodeId, is_healthy: bool, response_time_ms: f64) {
-        let mut weights = self.node_weights.write().await;
-        if let Some(weight) = weights.get_mut(node_id) {
-            weight.is_healthy = is_healthy;
-            weight.avg_response_time_ms = response_time_ms;
-            weight.last_updated = Instant::now();
-            
-            // 根据响应时间调整权重
-            if is_healthy {
-                // 响应时间越短，权重越高
-                let base_weight = 1.0;
-                let time_factor = (1000.0 / (response_time_ms + 100.0)).min(2.0);
-                weight.weight = (base_weight * time_factor).clamp(0.1, 1.0);
-            } else {
-                weight.weight = 0.0; // 不健康节点权重为0
-            }
-
-            debug!("更新节点 {} 健康状态: {}, 响应时间: {:.2}ms, 权重: {:.2}", 
-                   node_id, is_healthy, response_time_ms, weight.weight);
+    pub async fn update_node_health(&self, node_id: &NodeId, is_healthy: bool, response_time_ms: f64) -> Result<(), LoadBalancerError> {
+        // 参数验证
+        if node_id.trim().is_empty() {
+            return Err(LoadBalancerError::InvalidParameter(
+                "节点ID不能为空".to_string()
+            ));
         }
+
+        if response_time_ms < 0.0 || response_time_ms > 300_000.0 { // 最大5分钟
+            return Err(LoadBalancerError::InvalidParameter(
+                format!("响应时间无效，必须在0-300000ms范围内: {}", response_time_ms)
+            ));
+        }
+
+        let mut weights = self.node_weights.write().await;
+        let weight = weights.get_mut(node_id)
+            .ok_or_else(|| LoadBalancerError::NodeNotFound(node_id.clone()))?;
+            
+        weight.is_healthy = is_healthy;
+        weight.avg_response_time_ms = response_time_ms;
+        weight.last_updated = Instant::now();
+        
+        // 根据响应时间调整权重
+        if is_healthy {
+            // 响应时间越短，权重越高
+            let base_weight = 1.0;
+            let time_factor = (1000.0 / (response_time_ms + 100.0)).min(2.0);
+            weight.weight = (base_weight * time_factor).clamp(0.1, 1.0);
+        } else {
+            weight.weight = 0.0; // 不健康节点权重为0
+        }
+
+        debug!("更新节点 {} 健康状态: {}, 响应时间: {:.2}ms, 权重: {:.2}", 
+               node_id, is_healthy, response_time_ms, weight.weight);
+        
+        Ok(())
     }
 
     /// 更新节点连接数
@@ -161,7 +295,14 @@ impl IntelligentLoadBalancer {
     }
 
     /// 选择目标节点进行请求路由
-    pub async fn route_request(&self, request_type: &str) -> Option<RouteResult> {
+    pub async fn route_request(&self, request_type: &str) -> Result<RouteResult, LoadBalancerError> {
+        // 参数验证
+        if request_type.trim().is_empty() {
+            return Err(LoadBalancerError::InvalidParameter(
+                "请求类型不能为空".to_string()
+            ));
+        }
+
         let weights = self.node_weights.read().await;
         let healthy_nodes: Vec<_> = weights
             .values()
@@ -170,7 +311,7 @@ impl IntelligentLoadBalancer {
 
         if healthy_nodes.is_empty() {
             warn!("没有健康的节点可用于请求路由");
-            return None;
+            return Err(LoadBalancerError::NoHealthyNodes);
         }
 
         let target_node = match self.config.strategy {
@@ -187,32 +328,29 @@ impl IntelligentLoadBalancer {
                 self.select_load_based(&healthy_nodes).await
             },
             LoadBalancingStrategy::LocationAware => {
-                // 简化实现，回退到基于负载的选择
-                self.select_load_based(&healthy_nodes).await
+                self.select_location_aware(&healthy_nodes).await
             },
         };
 
-        if let Some(target) = target_node {
-            // 选择备选节点
-            let backup_nodes: Vec<NodeId> = healthy_nodes
-                .iter()
-                .filter(|w| w.node_id != target)
-                .take(2) // 最多2个备选节点
-                .map(|w| w.node_id.clone())
-                .collect();
+        let target = target_node.ok_or(LoadBalancerError::NoHealthyNodes)?;
+        
+        // 选择备选节点
+        let backup_nodes: Vec<NodeId> = healthy_nodes
+            .iter()
+            .filter(|w| w.node_id != target)
+            .take(2) // 最多2个备选节点
+            .map(|w| w.node_id.clone())
+            .collect();
 
-            // 更新路由统计
-            let mut stats = self.routing_stats.write().await;
-            *stats.entry(target.clone()).or_insert(0) += 1;
+        // 更新路由统计
+        let mut stats = self.routing_stats.write().await;
+        *stats.entry(target.clone()).or_insert(0) += 1;
 
-            Some(RouteResult {
-                target_node: target.clone(),
-                backup_nodes,
-                routing_reason: format!("使用 {:?} 策略选择节点", self.config.strategy),
-            })
-        } else {
-            None
-        }
+        Ok(RouteResult {
+            target_node: target.clone(),
+            backup_nodes,
+            routing_reason: format!("使用 {:?} 策略选择节点 {}", self.config.strategy, target),
+        })
     }
 
     /// 轮询选择
@@ -286,7 +424,49 @@ impl IntelligentLoadBalancer {
         Some(best_node.node_id.clone())
     }
 
-    /// 计算节点评分
+    /// 基于位置的选择
+    async fn select_location_aware(&self, healthy_nodes: &[&NodeWeight]) -> Option<NodeId> {
+        if healthy_nodes.is_empty() {
+            return None;
+        }
+
+        // 按位置优先级分组
+        let mut datacenter_groups: HashMap<String, Vec<&NodeWeight>> = HashMap::new();
+        let mut no_location_nodes = Vec::new();
+
+        for node in healthy_nodes {
+            if let Some(ref location) = node.location {
+                datacenter_groups
+                    .entry(location.datacenter.clone())
+                    .or_insert_with(Vec::new)
+                    .push(node);
+            } else {
+                no_location_nodes.push(*node);
+            }
+        }
+
+        // 优先选择最优数据中心的节点
+        if let Some(best_dc_nodes) = datacenter_groups
+            .values()
+            .min_by_key(|nodes| {
+                nodes.iter()
+                    .filter_map(|n| n.location.as_ref())
+                    .map(|l| l.latency_tier)
+                    .min()
+                    .unwrap_or(5)
+            }) {
+            
+            // 在最优数据中心内使用基于负载的选择
+            return self.select_load_based(best_dc_nodes).await;
+        }
+
+        // 如果没有位置信息，回退到基于负载的选择
+        if !no_location_nodes.is_empty() {
+            return self.select_load_based(&no_location_nodes).await;
+        }
+
+        None
+    }
     fn calculate_node_score(&self, node: &NodeWeight) -> f64 {
         if !node.is_healthy {
             return 0.0;
