@@ -635,6 +635,20 @@ pub struct NodeInfo {
     pub load: NodeLoad,
 }
 
+impl Default for NodeInfo {
+    fn default() -> Self {
+        Self {
+            id: "node_0".to_string(),
+            address: "127.0.0.1".to_string(),
+            port: 8080,
+            state: NodeState::Healthy,
+            last_heartbeat: 0,
+            metadata: HashMap::new(),
+            load: NodeLoad::default(),
+        }
+    }
+}
+
 /// 节点状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeState {

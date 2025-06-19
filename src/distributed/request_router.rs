@@ -310,11 +310,14 @@ impl ClusterAwareRequestRouter {
         // 执行请求
         let result = self.execute_request_with_routing(
             route_info.clone(),
-            |node_id| async move {
-                self.network_client
-                    .send_search_request(&node_id, &search_request)
-                    .await
-                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+            |node_id| {
+                let search_request = search_request.clone();
+                async move {
+                    self.network_client
+                        .send_search_request_to_router(&node_id, &search_request)
+                        .await
+                        .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+                }
             },
         ).await?;
 
@@ -342,11 +345,14 @@ impl ClusterAwareRequestRouter {
         // 执行请求
         let result = self.execute_request_with_routing(
             route_info.clone(),
-            |node_id| async move {
-                self.network_client
-                    .send_insert_request(&node_id, &document)
-                    .await
-                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+            |node_id| {
+                let document = document.clone();
+                async move {
+                    self.network_client
+                        .send_insert_request(&node_id, &document)
+                        .await
+                        .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+                }
             },
         ).await?;
 
@@ -388,11 +394,14 @@ impl ClusterAwareRequestRouter {
         // 执行请求
         self.execute_request_with_routing(
             route_info,
-            |node_id| async move {
-                self.network_client
-                    .send_batch_insert_request(&node_id, &documents)
-                    .await
-                    .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+            |node_id| {
+                let documents = documents.clone();
+                async move {
+                    self.network_client
+                        .send_batch_insert_request(&node_id, &documents)
+                        .await
+                        .map_err(|e| RequestRouterError::Network(VectorDbError::NetworkError(e.to_string())))
+                }
             },
         ).await
     }
@@ -586,7 +595,7 @@ impl ClusterAwareRequestRouter {
         execution_time_ms: u64,
         success: bool,
         used_failover: bool,
-        retry_count: u32,
+        _retry_count: u32,
     ) {
         let mut metrics = self.routing_metrics.write().await;
         

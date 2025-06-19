@@ -831,6 +831,7 @@ impl RecoveryCoordinator {
         
         // 1. 查找故障的主节点分片
         let failed_shards = self.identify_failed_primary_shards(&task.failed_node).await?;
+        let shard_count = failed_shards.len(); // Store count before moving
         
         // 2. 为每个分片选择新的主节点
         for shard_id in failed_shards {
@@ -855,7 +856,7 @@ impl RecoveryCoordinator {
             }
         }
         
-        info!("主节点故障转移完成，任务ID: {}，处理分片数: {}", task.task_id, failed_shards.len());
+        info!("主节点故障转移完成，任务ID: {}，处理分片数: {}", task.task_id, shard_count);
         Ok(())
     }
     
@@ -915,6 +916,7 @@ impl RecoveryCoordinator {
         
         // 1. 识别需要替换副本的分片
         let affected_shards = self.identify_shards_with_failed_replicas(&task.failed_node).await?;
+        let shard_count = affected_shards.len(); // Store count before moving
         
         for shard_id in affected_shards {
             // 2. 选择新的副本节点
@@ -939,7 +941,7 @@ impl RecoveryCoordinator {
             }
         }
         
-        info!("副本替换完成，任务ID: {}，处理分片数: {}", task.task_id, affected_shards.len());
+        info!("副本替换完成，任务ID: {}，处理分片数: {}", task.task_id, shard_count);
         Ok(())
     }
     

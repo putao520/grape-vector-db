@@ -220,7 +220,7 @@ impl IntelligentLoadBalancer {
             avg_response_time_ms: 50.0,
             is_healthy: true,
             last_updated: Instant::now(),
-            location,
+            location: location.clone(),
         };
 
         let mut weights = self.node_weights.write().await;

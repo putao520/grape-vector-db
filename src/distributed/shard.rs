@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use chrono::Utc;
@@ -834,7 +834,7 @@ impl ShardManager {
         let shard_map = self.shard_map.read().await;
         let local_shards = self.local_shards.read().await;
 
-        let mut remote_search_tasks = Vec::new();
+        let mut remote_search_tasks: Vec<tokio::task::JoinHandle<Result<Vec<ScoredPoint>, String>>> = Vec::new();
 
         for (&shard_id, shard_info) in shard_map.iter() {
             // 跳过本地分片
@@ -1353,12 +1353,12 @@ impl ShardManager {
                 match shard_info.state {
                     ShardState::Active => shard_load *= 1.0,     // 正常负载
                     ShardState::Migrating => shard_load *= 1.5, // 迁移中负载更高
-                    ShardState::Rebalancing => shard_load *= 1.3, // 重平衡负载较高
+                    ShardState::Splitting => shard_load *= 1.3, // 分裂中负载较高
                     _ => shard_load *= 0.8, // 其他状态负载较低
                 }
                 
                 // 基于分片向量数量估算负载（需要从存储中获取实际数据）
-                if let Ok(shard_size) = self.estimate_shard_size(shard_info.shard_id).await {
+                if let Ok(shard_size) = self.estimate_shard_size(shard_info.id).await {
                     let size_factor = (shard_size as f64 / (1024.0 * 1024.0 * 100.0)).min(2.0); // 每100MB增加负载，最大2倍
                     shard_load *= 1.0 + size_factor;
                 }
@@ -1374,7 +1374,7 @@ impl ShardManager {
                 if let Some(replica_load) = node_loads.get_mut(replica_node) {
                     let mut replica_shard_load = 0.6; // 副本基础负载为主分片的60%
                     
-                    if let Ok(shard_size) = self.estimate_shard_size(shard_info.shard_id).await {
+                    if let Ok(shard_size) = self.estimate_shard_size(shard_info.id).await {
                         let size_factor = (shard_size as f64 / (1024.0 * 1024.0 * 150.0)).min(1.5); // 副本的大小因子较小
                         replica_shard_load *= 1.0 + size_factor;
                     }

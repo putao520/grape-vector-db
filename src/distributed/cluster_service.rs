@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{info, warn, debug};
 use serde::{Deserialize, Serialize};
 
 use crate::distributed::{
@@ -408,6 +409,7 @@ impl ClusterService {
         let network_client = self.network_client.clone();
         let load_balancer = self.load_balancer.clone();
         let cluster_manager = self.cluster_manager.clone();
+        let seed_nodes_info = config.seed_nodes.clone(); // Clone for logging
 
         tokio::spawn(async move {
             let mut discovery_interval = tokio::time::interval(Duration::from_secs(config.discovery_interval_secs));
@@ -439,7 +441,7 @@ impl ClusterService {
                             }
                             
                             // 尝试加入集群
-                            if let Err(e) = cluster_manager.join_cluster(seed_node).await {
+                            if let Err(e) = cluster_manager.join_cluster(vec![seed_node.clone()]).await {
                                 warn!("加入集群失败，种子节点: {}, 错误: {}", seed_node, e);
                             }
                         },
@@ -465,7 +467,7 @@ impl ClusterService {
             }
         });
 
-        info!("服务发现已启动，种子节点: {:?}", config.seed_nodes);
+        info!("服务发现已启动，种子节点: {:?}", seed_nodes_info);
         Ok(())
     }
 
@@ -492,13 +494,12 @@ impl ClusterService {
     /// 更新集群状态
     async fn update_cluster_status(&self) {
         if let Some(ref request_router) = self.request_router {
-            if let Ok(health_status) = request_router.get_cluster_health().await {
-                let mut status = self.status.write().await;
-                status.total_nodes = health_status.total_nodes;
-                status.healthy_nodes = health_status.healthy_nodes;
-                status.load_balance_status = Some(request_router.get_load_balance_status().await);
-                status.last_updated = chrono::Utc::now();
-            }
+            let health_status = request_router.get_cluster_health().await;
+            let mut status = self.status.write().await;
+            status.total_nodes = health_status.total_nodes;
+            status.healthy_nodes = health_status.healthy_nodes;
+            status.load_balance_status = Some(request_router.get_load_balance_status().await);
+            status.last_updated = chrono::Utc::now();
         }
     }
 

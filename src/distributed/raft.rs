@@ -1061,7 +1061,7 @@ impl RaftNode {
         let mut log_entries: Vec<(u64, LogEntry)> = Vec::new();
         
         // 扫描所有以"raft_log_"开头的键
-        let log_prefix = b"raft_log_";
+        let _log_prefix = b"raft_log_";
         let mut last_log_index = 0u64;
         let mut recovered_count = 0;
         
@@ -1071,7 +1071,7 @@ impl RaftNode {
             let log_key = format!("raft_log_{:020}", log_index);
             
             // 尝试从存储中获取日志条目
-            if let Ok(Some(log_data)) = self.storage.get(&log_key).await {
+            if let Ok(Some(log_data)) = self.storage.get(log_key.as_bytes()) {
                 match bincode::deserialize::<LogEntry>(&log_data) {
                     Ok(log_entry) => {
                         log_entries.push((log_index, log_entry));
@@ -1098,27 +1098,30 @@ impl RaftNode {
         log_entries.sort_by_key(|(index, _)| *index);
         
         // 3. 重建内存中的日志数组
-        let mut logs = self.logs.write().await;
+        let mut logs = self.log.write().await;
         logs.clear();
         
         let mut expected_index = 1u64;
+        let mut last_log_info = None;
+        
         for (index, entry) in log_entries {
             if index != expected_index {
                 warn!("检测到日志间隙：期望索引 {}，实际索引 {}", expected_index, index);
                 // 在企业级实现中，这里可能需要触发日志修复或重新同步
             }
             
+            last_log_info = Some((index, entry.term));
             logs.push(entry);
             expected_index = index + 1;
         }
         
         // 4. 更新日志状态
-        if let Some((last_index, last_entry)) = log_entries.last() {
-            let mut state = self.persistent_state.write().await;
+        if let Some((last_index, last_term)) = last_log_info {
+            let current_term = *self.current_term.read().await;
             // 确保当前任期不低于日志中的任期
-            if last_entry.term > state.current_term {
-                warn!("日志中发现更高任期 {}，当前任期 {}", last_entry.term, state.current_term);
-                state.current_term = last_entry.term;
+            if last_term > current_term {
+                warn!("日志中发现更高任期 {}，当前任期 {}", last_term, current_term);
+                *self.current_term.write().await = last_term;
             }
             
             info!("日志恢复完成：恢复了 {} 条条目，最后索引 {}，耗时 {:?}", 
@@ -1135,7 +1138,7 @@ impl RaftNode {
     
     /// 验证日志一致性
     async fn verify_log_consistency(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let logs = self.logs.read().await;
+        let logs = self.log.read().await;
         
         if logs.is_empty() {
             return Ok(());
@@ -1438,10 +1441,10 @@ impl RaftNode {
         // 尝试反序列化命令以提取类型信息
         if let Ok(command) = bincode::deserialize::<VectorCommand>(data) {
             match command {
-                VectorCommand::Insert { .. } => "insert".to_string(),
+                VectorCommand::Upsert { .. } => "upsert".to_string(),
                 VectorCommand::Delete { .. } => "delete".to_string(),
-                VectorCommand::Update { .. } => "update".to_string(),
-                VectorCommand::CreateIndex { .. } => "create_index".to_string(),
+                VectorCommand::CreateShard { .. } => "create_shard".to_string(),
+                VectorCommand::DropShard { .. } => "drop_shard".to_string(),
             }
         } else {
             "unknown".to_string()

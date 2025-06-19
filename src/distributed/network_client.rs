@@ -300,7 +300,7 @@ impl DistributedNetworkClient {
     }
 
     /// 发送搜索请求 (for request router)
-    pub async fn send_search_request(
+    pub async fn send_search_request_to_router(
         &self,
         target_node: &NodeId,
         search_request: &crate::types::SearchRequest,
