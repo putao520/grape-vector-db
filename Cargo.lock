@@ -1144,6 +1144,7 @@ dependencies = [
  "moka",
  "nalgebra",
  "ndarray",
+ "num_cpus",
  "parking_lot 0.12.4",
  "postcard",
  "proptest",

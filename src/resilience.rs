@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::{RwLock, Mutex};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -514,7 +514,7 @@ impl<T> ResourcePool<T> {
 
     /// 从池中获取资源
     pub async fn acquire(&self) -> ResilienceResult<PooledResource<T>> {
-        let permit = self.semaphore.acquire().await
+        let _permit = self.semaphore.acquire().await
             .map_err(|_| ResilienceError::ResourcePoolExhausted { 
                 resource: self.name.clone() 
             })?;
@@ -527,7 +527,7 @@ impl<T> ResourcePool<T> {
         Ok(PooledResource {
             resource,
             pool: self.resources.clone(),
-            _permit: permit,
+            semaphore: self.semaphore.clone(),
         })
     }
 
@@ -555,7 +555,7 @@ impl<T> ResourcePool<T> {
 pub struct PooledResource<T> {
     resource: Option<T>,
     pool: Arc<Mutex<Vec<T>>>,
-    _permit: tokio::sync::SemaphorePermit<'static>,
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl<T> PooledResource<T> {
@@ -581,6 +581,8 @@ impl<T> Drop for PooledResource<T> {
             let mut pool = self.pool.lock();
             pool.push(resource);
         }
+        // 释放信号量许可，允许其他请求获取资源
+        self.semaphore.add_permits(1);
     }
 }
 
@@ -684,7 +686,7 @@ impl ResilienceManager {
             let op = operation.clone();
             let tw = timeout_wrapper.clone();
             async move {
-                tw.execute(|| op()).await
+                tw.execute(op).await
                     .map_err(|e| format!("{:?}", e))
                     .and_then(|r| r.map_err(|e| e.to_string()))
             }

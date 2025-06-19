@@ -119,6 +119,8 @@ pub struct BM25Stats {
 pub struct SearchRequest {
     /// 查询向量
     pub vector: Vec<f32>,
+    /// 文本查询（用于混合搜索）
+    pub query: Option<String>,
     /// 返回结果数量
     pub limit: usize,
     /// 过滤条件（可选）
@@ -768,7 +770,7 @@ impl Default for ClusterStats {
 }
 
 /// 集群信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {
     /// 集群配置
     pub config: ClusterConfig,
@@ -784,21 +786,10 @@ pub struct ClusterInfo {
     pub version: u64,
 }
 
-impl Default for ClusterInfo {
-    fn default() -> Self {
-        Self {
-            config: ClusterConfig::default(),
-            nodes: HashMap::new(),
-            leader_id: None,
-            shard_map: ShardMap::default(),
-            stats: ClusterStats::default(),
-            version: 0,
-        }
-    }
-}
+
 
 /// 分片映射
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShardMap {
     /// 分片信息
     pub shards: HashMap<u32, ShardInfo>,
@@ -806,14 +797,7 @@ pub struct ShardMap {
     pub version: u64,
 }
 
-impl Default for ShardMap {
-    fn default() -> Self {
-        Self {
-            shards: HashMap::new(),
-            version: 0,
-        }
-    }
-}
+
 
 /// 心跳消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -915,6 +899,9 @@ pub enum VectorDbError {
     #[error("过滤错误: {0}")]
     FilterError(String),
 
+    #[error("嵌入错误: {0}")]
+    EmbeddingError(String),
+
     #[error("其他错误: {0}")]
     Other(String),
 }
@@ -923,6 +910,11 @@ impl VectorDbError {
     /// 创建一个通用错误
     pub fn other(msg: impl Into<String>) -> Self {
         VectorDbError::Other(msg.into())
+    }
+
+    /// 创建一个嵌入错误
+    pub fn embedding_error(msg: impl Into<String>) -> Self {
+        VectorDbError::EmbeddingError(msg.into())
     }
 }
 

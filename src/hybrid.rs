@@ -8,19 +8,18 @@
 
 use crate::{
     types::{
-        SparseVector, HybridSearchRequest, FusionStrategy, SearchResult, 
+        HybridSearchRequest, FusionStrategy, SearchResult, 
         ScoreBreakdown, DocumentRecord, FusionWeights, FusionPerformanceStats,
         QueryMetrics
     },
     sparse::{SparseIndex, SimpleTokenizer},
-    index::HnswVectorIndex,
+    index::{HnswVectorIndex, VectorIndex},
     storage::VectorStore,
-    errors::{Result, VectorDbError},
+    errors::Result,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH, Instant};
-use serde::{Serialize, Deserialize};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 /// 学习式融合模型
 pub trait FusionModel: Send + Sync {
@@ -92,7 +91,7 @@ impl StatisticalFusionModel {
 }
 
 impl FusionModel for StatisticalFusionModel {
-    fn predict_weights(&self, query: &str, context: &FusionContext) -> FusionWeights {
+    fn predict_weights(&self, _query: &str, context: &FusionContext) -> FusionWeights {
         let query_type_key = match context.query_type {
             QueryType::Semantic => "semantic",
             QueryType::Keyword => "keyword", 
@@ -154,7 +153,7 @@ impl FusionModel for StatisticalFusionModel {
 /// 混合搜索引擎
 pub struct HybridSearchEngine {
     /// 密集向量搜索引擎
-    dense_engine: Arc<HnswVectorIndex>,
+    dense_engine: Arc<Mutex<HnswVectorIndex>>,
     /// 稀疏向量搜索引擎
     sparse_engine: Arc<SparseIndex>,
     /// 文本分词器
@@ -174,7 +173,7 @@ pub struct HybridSearchEngine {
 impl HybridSearchEngine {
     /// 创建新的混合搜索引擎
     pub fn new(
-        dense_engine: Arc<HnswVectorIndex>,
+        dense_engine: Arc<Mutex<HnswVectorIndex>>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
     ) -> Self {
@@ -192,7 +191,7 @@ impl HybridSearchEngine {
 
     /// 创建带有学习式融合模型的搜索引擎
     pub fn with_fusion_model(
-        dense_engine: Arc<HnswVectorIndex>,
+        dense_engine: Arc<Mutex<HnswVectorIndex>>,
         sparse_engine: Arc<SparseIndex>,
         fusion_strategy: FusionStrategy,
         fusion_model: Arc<Mutex<dyn FusionModel>>,
@@ -212,15 +211,11 @@ impl HybridSearchEngine {
     /// 添加文档到混合索引
     pub async fn add_document<S: VectorStore + ?Sized>(
         &self, 
-        store: &S, 
+        _store: &S, 
         record: &DocumentRecord
     ) -> Result<()> {
         // 添加到密集向量索引
-        let vector_point = crate::types::VectorPoint {
-            vector: record.embedding.clone(),
-            document_id: record.id.clone(),
-        };
-        self.dense_engine.add_point(vector_point)?;
+        self.dense_engine.lock().add_vector(record.id.clone(), record.embedding.clone())?;
 
         // 如果有稀疏向量表示，添加到稀疏索引
         if let Some(sparse_repr) = &record.sparse_representation {
@@ -274,9 +269,8 @@ impl HybridSearchEngine {
 
         // 1. 密集向量搜索
         let dense_results = if let Some(dense_vector) = &request.dense_vector {
-            let results = self.dense_engine.search(dense_vector, request.limit * 2)?;
+            let results = self.dense_engine.lock().search(dense_vector, request.limit * 2)?;
             results.into_iter()
-                .map(|r| (r.document_id, r.similarity))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -320,15 +314,17 @@ impl HybridSearchEngine {
         // 5. 获取文档详情并构建最终结果
         for (doc_id, score, breakdown) in fused_results.into_iter().take(request.limit) {
             if let Some(doc) = store.get_document(&doc_id).await? {
+                let snippets = if let Some(query) = &request.text_query {
+                    Some(vec![self.extract_snippet(&doc.content, Some(query))])
+                } else {
+                    None
+                };
+                
                 let result = SearchResult {
-                    document_id: doc.id.clone(),
-                    title: doc.title.clone(),
-                    content_snippet: self.extract_snippet(&doc.content, request.text_query.as_deref()),
-                    similarity_score: score,
-                    package_name: doc.package_name.clone(),
-                    doc_type: doc.doc_type.clone(),
-                    metadata: doc.metadata,
-                    score_breakdown: Some(breakdown),
+                    document: doc,
+                    score,
+                    relevance_score: Some(breakdown.final_score),
+                    matched_snippets: snippets,
                 };
                 search_results.push(result);
             }
@@ -602,13 +598,14 @@ impl HybridSearchEngine {
         let max_docs = 10000; // 最多处理10000个文档
         
         while offset < max_docs {
-            let docs = store.list_documents(offset, page_size).await?;
+            let doc_ids = store.list_document_ids(offset, page_size).await?;
             
-            if docs.is_empty() {
+            if doc_ids.is_empty() {
                 break; // 没有更多文档了
             }
             
-            for doc in docs {
+            for doc_id in doc_ids {
+                if let Some(doc) = store.get_document(&doc_id).await? {
                 let content_lower = doc.content.to_lowercase();
                 let title_lower = doc.title.to_lowercase();
                 
@@ -626,6 +623,7 @@ impl HybridSearchEngine {
                 
                 if score > 0.0 {
                     all_results.push((doc.id, score));
+                }
                 }
             }
             
@@ -669,13 +667,14 @@ impl HybridSearchEngine {
 
     /// 删除文档
     pub async fn remove_document(&self, document_id: &str) -> Result<bool> {
-        let dense_removed = self.dense_engine.remove_point(document_id)?;
+        let dense_removed = self.dense_engine.lock().remove_vector(document_id)?;
         let sparse_removed = self.sparse_engine.remove_document(document_id)?;
         
         Ok(dense_removed || sparse_removed)
     }
 
     /// 学习式融合算法
+    #[allow(clippy::too_many_arguments)]
     fn learned_fusion(
         &self,
         dense_results: &[(String, f32)],
@@ -690,8 +689,7 @@ impl HybridSearchEngine {
             // 根据查询特征调整权重
             let context = self.analyze_query_context(request);
             if let Some(model) = &self.fusion_model {
-                let model_guard = model.lock()
-                    .map_err(|_| VectorDbError::Other("Failed to acquire model lock".to_string()))?;
+                let model_guard = model.lock();
                 model_guard.predict_weights(
                     request.text_query.as_deref().unwrap_or(""),
                     &context
@@ -829,8 +827,7 @@ impl HybridSearchEngine {
         request: &HybridSearchRequest,
     ) -> Result<FusionWeights> {
         // 获取相似查询的历史性能
-        let history = self.query_history.lock()
-            .map_err(|_| VectorDbError::Other("Failed to acquire query history lock".to_string()))?;
+        let history = self.query_history.lock();
         let query_text = request.text_query.as_deref().unwrap_or("");
         
         // 找到相似的历史查询
@@ -882,7 +879,7 @@ impl HybridSearchEngine {
     pub fn record_query_metrics(&self, metrics: QueryMetrics) -> Result<()> {
         // 更新历史记录
         {
-            let mut history = self.query_history.lock().unwrap();
+            let mut history = self.query_history.lock();
             history.push(metrics.clone());
             
             // 限制历史记录大小
@@ -893,7 +890,7 @@ impl HybridSearchEngine {
 
         // 如果有学习模型，更新模型
         if let Some(model) = &self.fusion_model {
-            let mut model_guard = model.lock().unwrap();
+            let mut model_guard = model.lock();
             model_guard.update_model(&metrics)?;
         }
 
@@ -902,13 +899,13 @@ impl HybridSearchEngine {
 
     /// 获取性能统计
     pub fn get_performance_stats(&self) -> HashMap<String, FusionPerformanceStats> {
-        self.performance_stats.lock().unwrap().clone()
+        self.performance_stats.lock().clone()
     }
 
     /// 计算缓存命中率
     fn calculate_cache_hit_rate(&self) -> f64 {
         // 基于查询历史计算缓存命中率
-        let history = self.query_history.lock().unwrap();
+        let history = self.query_history.lock();
         if history.is_empty() {
             return 0.0;
         }
@@ -928,14 +925,14 @@ impl HybridSearchEngine {
     /// 获取搜索引擎统计信息
     pub fn get_stats(&self) -> crate::types::DatabaseStats {
         let sparse_stats = self.sparse_engine.get_stats();
-        let dense_stats = self.dense_engine.stats();
+        let dense_stats = self.dense_engine.lock().get_stats();
         
         crate::types::DatabaseStats {
             document_count: sparse_stats.total_documents,
-            dense_vector_count: dense_stats.point_count,
+            dense_vector_count: dense_stats.vector_count,
             sparse_vector_count: sparse_stats.total_documents,
-            memory_usage_mb: dense_stats.memory_usage_mb + self.sparse_engine.get_memory_usage_mb(),
-            dense_index_size_mb: dense_stats.memory_usage_mb,
+            memory_usage_mb: (dense_stats.memory_usage as f64 / (1024.0 * 1024.0)) + self.sparse_engine.get_memory_usage_mb(),
+            dense_index_size_mb: dense_stats.memory_usage as f64 / (1024.0 * 1024.0),
             sparse_index_size_mb: self.sparse_engine.get_memory_usage_mb(),
             cache_hit_rate: self.calculate_cache_hit_rate(),
             bm25_stats: Some(sparse_stats),
@@ -949,13 +946,12 @@ mod tests {
     use crate::{
         sparse::{SparseIndex, BM25Parameters},
         index::{HnswVectorIndex},
-        config::HnswConfig,
         types::FusionStrategy,
     };
 
     #[test]
     fn test_rrf_fusion() {
-        let dense_engine = Arc::new(HnswVectorIndex::new(HnswConfig::default(), 384));
+        let dense_engine = Arc::new(Mutex::new(HnswVectorIndex::new()));
         let sparse_engine = Arc::new(SparseIndex::new(BM25Parameters::default()));
         
         let engine = HybridSearchEngine::new(

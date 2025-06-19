@@ -8,16 +8,14 @@
 
 use crate::{
     types::{
-        HybridSearchRequest, FusionStrategy, FusionWeights, 
-        FusionPerformanceStats, QueryMetrics, SearchResult
+        HybridSearchRequest, FusionStrategy, FusionWeights, SearchResult
     },
-    hybrid::{HybridSearchEngine, StatisticalFusionModel},
+    hybrid::HybridSearchEngine,
     storage::VectorStore,
-    errors::{Result, VectorDbError},
+    errors::Result,
 };
-use std::time::{SystemTime, UNIX_EPOCH, Instant, Duration};
+use std::time::Instant;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 
 /// 基准测试配置
@@ -182,7 +180,7 @@ impl BenchmarkSuite {
         &self,
         engine: &HybridSearchEngine,
         store: &S,
-        strategy: &FusionStrategy,
+        _strategy: &FusionStrategy,
         strategy_name: &str,
     ) -> Result<BenchmarkResult> {
         let mut latencies = Vec::new();
@@ -283,7 +281,7 @@ impl BenchmarkSuite {
     fn calculate_precision_recall(&self, query: &TestQuery, results: &[SearchResult]) -> (f64, f64) {
         let relevant_docs: std::collections::HashSet<_> = query.expected_results.iter().collect();
         let retrieved_docs: std::collections::HashSet<_> = results.iter()
-            .map(|r| &r.document_id)
+            .map(|r| &r.document.id)
             .collect();
 
         let relevant_retrieved = relevant_docs.intersection(&retrieved_docs).count();
@@ -330,7 +328,7 @@ impl BenchmarkSuite {
             .take(k)
             .enumerate()
             .map(|(i, result)| {
-                let rel = relevance.get(&result.document_id).copied().unwrap_or(0.0);
+                let rel = relevance.get(&result.document.id).copied().unwrap_or(0.0);
                 let rank = i + 1;
                 rel as f64 / (rank as f64).log2()
             })
@@ -370,7 +368,7 @@ impl BenchmarkSuite {
 
     /// 生成随机查询
     fn generate_random_query(&self, index: usize) -> String {
-        let queries = vec![
+        let queries = [
             "如何使用向量数据库进行语义搜索",
             "数据库性能优化技巧",
             "机器学习模型训练",
@@ -403,7 +401,7 @@ impl BenchmarkSuite {
         let mut report = String::new();
         
         report.push_str("# 向量数据库混合搜索性能基准测试报告\n\n");
-        report.push_str(&format!("测试配置:\n"));
+        report.push_str("测试配置:\n");
         report.push_str(&format!("- 查询数量: {}\n", self.config.num_queries));
         report.push_str(&format!("- 结果限制: {}\n", self.config.results_limit));
         report.push_str(&format!("- 数据集大小: {}\n", self.config.dataset_size));
@@ -457,7 +455,7 @@ pub fn create_concurrent_benchmark_config(
     concurrency: usize,
 ) -> (Vec<Vec<TestQuery>>, BenchmarkConfig) {
     // 将查询分成批次，返回配置供外部使用
-    let chunk_size = (queries.len() + concurrency - 1) / concurrency;
+    let chunk_size = queries.len().div_ceil(concurrency);
     let chunks: Vec<Vec<TestQuery>> = queries.chunks(chunk_size)
         .map(|chunk| chunk.to_vec())
         .collect();

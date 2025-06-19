@@ -1,10 +1,7 @@
-use chrono;
 use grape_vector_db::{errors::Result, Document, VectorDatabase, VectorDbConfig};
-use rand;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio;
 use tracing::error;
 
 #[tokio::main]

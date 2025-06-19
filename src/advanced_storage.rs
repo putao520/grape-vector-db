@@ -676,3 +676,177 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result
     }
     Ok(())
 }
+
+/// Implement VectorStore trait for AdvancedStorage
+#[async_trait::async_trait]
+impl crate::storage::VectorStore for AdvancedStorage {
+    async fn insert_document(&mut self, document: crate::types::Document) -> crate::errors::Result<String> {
+        let id = if document.id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            document.id
+        };
+
+        let point = crate::types::Point {
+            id: id.clone(),
+            vector: document.vector.unwrap_or_default(),
+            payload: document.metadata
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
+        };
+
+        self.store_vector(&point)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
+        
+        Ok(id)
+    }
+
+    async fn batch_insert_documents(&mut self, documents: Vec<crate::types::Document>) -> crate::errors::Result<Vec<String>> {
+        let mut ids = Vec::new();
+        for document in documents {
+            let id = self.insert_document(document).await?;
+            ids.push(id);
+        }
+        Ok(ids)
+    }
+
+    async fn get_document(&self, id: &str) -> crate::errors::Result<Option<crate::types::DocumentRecord>> {
+        if let Some(point) = self.get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
+            
+            let doc = crate::types::DocumentRecord {
+                id: point.id.clone(),
+                title: "".to_string(), // AdvancedStorage doesn't store title
+                content: "".to_string(), // AdvancedStorage doesn't store content
+                embedding: point.vector.clone(),
+                package_name: "".to_string(),
+                doc_type: "".to_string(),
+                metadata: point.payload
+                    .into_iter()
+                    .map(|(k, v)| (k, v.to_string()))
+                    .collect(),
+                language: "".to_string(),
+                version: "".to_string(),
+                vector: Some(point.vector),
+                sparse_representation: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            Ok(Some(doc))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn delete_document(&mut self, id: &str) -> crate::errors::Result<bool> {
+        self.delete_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))
+    }
+
+    async fn update_document(&mut self, id: &str, document: crate::types::Document) -> crate::errors::Result<bool> {
+        // Delete existing and insert new
+        self.delete_document(id).await?;
+        let mut doc_with_id = document;
+        doc_with_id.id = id.to_string();
+        self.insert_document(doc_with_id).await?;
+        Ok(true)
+    }
+
+    async fn vector_search(&self, _query_vector: &[f32], _limit: usize, _threshold: Option<f32>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+        // AdvancedStorage doesn't implement vector search directly
+        // This should be handled by the index layer
+        Err(crate::types::VectorDbError::NotImplemented("Vector search not implemented in AdvancedStorage, use index layer".into()))
+    }
+
+    async fn text_search(&self, _query: &str, _limit: usize, _filters: Option<HashMap<String, String>>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+        Err(crate::types::VectorDbError::NotImplemented("Text search not implemented in AdvancedStorage".into()))
+    }
+
+    async fn hybrid_search(&self, _query: &str, _query_vector: Option<&[f32]>, _limit: usize, _alpha: f32) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+        Err(crate::types::VectorDbError::NotImplemented("Hybrid search not implemented in AdvancedStorage".into()))
+    }
+
+    async fn get_stats(&self) -> crate::errors::Result<crate::types::VectorDbStats> {
+        let storage_stats = self.get_stats();
+        Ok(crate::types::VectorDbStats {
+            total_documents: storage_stats.estimated_keys as usize,
+            total_vectors: storage_stats.estimated_keys as usize,
+            index_size_bytes: storage_stats.total_size,
+            memory_usage_bytes: storage_stats.live_data_size,
+            last_optimization: None,
+        })
+    }
+
+    async fn optimize(&mut self) -> crate::errors::Result<()> {
+        self.compact()
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))
+    }
+
+    async fn backup(&self, _path: &std::path::Path) -> crate::errors::Result<()> {
+        let backup_id = self.create_backup()
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
+        // The actual backup logic would need to copy the backup to the specified path
+        tracing::info!("Backup created with ID: {}", backup_id);
+        Ok(())
+    }
+
+    async fn restore(&mut self, _path: &std::path::Path) -> crate::errors::Result<()> {
+        Err(crate::types::VectorDbError::NotImplemented("Restore not implemented".into()))
+    }
+
+    async fn clear(&mut self) -> crate::errors::Result<()> {
+        // This would need to clear all data in the storage
+        Err(crate::types::VectorDbError::NotImplemented("Clear not implemented".into()))
+    }
+
+    async fn count_documents(&self) -> crate::errors::Result<usize> {
+        Ok(self.get_stats().estimated_keys as usize)
+    }
+
+    async fn list_document_ids(&self, _offset: usize, _limit: usize) -> crate::errors::Result<Vec<String>> {
+        // This would need to list actual document IDs from storage
+        Err(crate::types::VectorDbError::NotImplemented("List document IDs not implemented".into()))
+    }
+
+    async fn document_exists(&self, id: &str) -> crate::errors::Result<bool> {
+        Ok(self.get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?
+            .is_some())
+    }
+
+    async fn get_document_metadata(&self, id: &str) -> crate::errors::Result<Option<HashMap<String, String>>> {
+        if let Some(point) = self.get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
+            // Convert HashMap<String, Value> to HashMap<String, String>
+            let string_metadata: HashMap<String, String> = point.payload
+                .into_iter()
+                .map(|(k, v)| (k, v.to_string()))
+                .collect();
+            Ok(Some(string_metadata))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn update_document_metadata(&mut self, id: &str, metadata: HashMap<String, String>) -> crate::errors::Result<bool> {
+        if let Some(mut point) = self.get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
+            // Convert HashMap<String, String> to HashMap<String, Value>
+            let value_metadata: HashMap<String, serde_json::Value> = metadata
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            point.payload = value_metadata;
+            self.store_vector(&point)
+                .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn search_by_metadata(&self, _filters: HashMap<String, String>, _limit: usize) -> crate::errors::Result<Vec<crate::types::DocumentRecord>> {
+        Err(crate::types::VectorDbError::NotImplemented("Search by metadata not implemented".into()))
+    }
+}
