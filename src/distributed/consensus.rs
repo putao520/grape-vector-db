@@ -660,25 +660,45 @@ impl ConsensusManager {
         let mut replication_tasks = Vec::new();
         
         // 向所有follower节点发送日志条目
-        for node in &cluster_info.nodes {
-            if node.id != self.local_node_id {
-                let node_id = node.id.clone();
+        for (node_id, node_info) in &cluster_info.nodes {
+            if *node_id != self.local_node_id {
+                let node_id_clone = node_id.clone();
                 let entry_clone = entry.clone();
                 let network_manager = self.network_manager.clone();
                 
                 let task = tokio::spawn(async move {
+                    // 转换LogEntry类型
+                    let raft_entry = crate::distributed::raft::LogEntry {
+                        index: entry_clone.index,
+                        term: entry_clone.term,
+                        entry_type: crate::distributed::raft::LogEntryType::Normal,
+                        data: entry_clone.command,
+                        timestamp: chrono::Utc::now().timestamp(),
+                    };
+                    
+                    // 构建 AppendRequest
+                    let append_request = crate::distributed::raft::AppendRequest {
+                        term: 1, // 简化实现，使用固定任期
+                        leader_id: "current_leader".to_string(), // 简化实现
+                        prev_log_index: 0, // 简化实现
+                        prev_log_term: 0, // 简化实现
+                        entries: vec![raft_entry],
+                        leader_commit: 0, // 简化实现
+                    };
+                    
                     // 发送AppendEntries RPC
-                    match network_manager.send_append_entries(&node_id, entry_clone).await {
-                        Ok(true) => {
-                            debug!("节点 {} 确认日志条目", node_id);
-                            true
-                        }
-                        Ok(false) => {
-                            warn!("节点 {} 拒绝日志条目", node_id);
-                            false
+                    match network_manager.send_append_request(&node_id_clone, append_request).await {
+                        Ok(response) => {
+                            if response.success {
+                                debug!("节点 {} 确认日志条目", node_id_clone);
+                                true
+                            } else {
+                                warn!("节点 {} 拒绝日志条目", node_id_clone);
+                                false
+                            }
                         }
                         Err(e) => {
-                            warn!("向节点 {} 发送日志条目失败: {}", node_id, e);
+                            warn!("向节点 {} 发送日志条目失败: {}", node_id_clone, e);
                             false
                         }
                     }

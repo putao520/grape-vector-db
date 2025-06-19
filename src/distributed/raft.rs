@@ -1394,7 +1394,7 @@ impl RaftNode {
             metadata: SnapshotMetadata {
                 version: 1,
                 created_at: chrono::Utc::now().timestamp(),
-                node_id: self.node_id.clone(),
+                node_id: self.config.node_id.clone(),
                 cluster_config: self.build_cluster_configuration().await,
             },
             applied_commands: Vec::new(),
@@ -1403,12 +1403,12 @@ impl RaftNode {
         
         // 1. 收集已应用的命令状态
         let last_applied = *self.last_applied.read().await;
-        let logs = self.logs.read().await;
+        let logs = self.log.read().await;
         
         let mut applied_count = 0;
         for i in 0..last_applied.min(logs.len() as u64) {
             let log_entry = &logs[i as usize];
-            if let LogEntryType::Command = log_entry.entry_type {
+            if let LogEntryType::Normal = log_entry.entry_type {
                 // 收集命令摘要信息（不是完整命令，以节省空间）
                 let command_summary = CommandSummary {
                     index: log_entry.index,
@@ -1452,28 +1452,16 @@ impl RaftNode {
     }
     
     /// 构建集群配置信息
-    async fn build_cluster_configuration(&self) -> Vec<ClusterNodeInfo> {
-        let peers = self.peers.read().await;
+    async fn build_cluster_configuration(&self) -> Vec<NodeId> {
+        let peers = self.config.peers.read().await;
         let mut cluster_config = Vec::new();
         
-        // 添加当前节点信息
-        cluster_config.push(ClusterNodeInfo {
-            node_id: self.node_id.clone(),
-            address: self.get_node_address(&self.node_id).await,
-            role: format!("{:?}", *self.role.read().await),
-            is_voting: true,
-            last_seen: chrono::Utc::now().timestamp(),
-        });
+        // 添加当前节点
+        cluster_config.push(self.config.node_id.clone());
         
-        // 添加对等节点信息
-        for (peer_id, peer_info) in peers.iter() {
-            cluster_config.push(ClusterNodeInfo {
-                node_id: peer_id.clone(),
-                address: peer_info.address.clone(),
-                role: "Follower".to_string(), // 从当前节点视角，其他都是Follower
-                is_voting: true,
-                last_seen: peer_info.last_heartbeat,
-            });
+        // 添加对等节点
+        for peer_id in peers.keys() {
+            cluster_config.push(peer_id.clone());
         }
         
         cluster_config

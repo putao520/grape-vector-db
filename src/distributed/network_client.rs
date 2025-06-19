@@ -307,7 +307,7 @@ impl DistributedNetworkClient {
     ) -> Result<crate::types::GrpcSearchResponse, NetworkError> {
         // 简化实现：使用现有的分布式搜索并转换结果
         let node_address = self.resolve_node_address(target_node).await;
-        let results = self.send_distributed_search_request(target_node, &node_address, search_request).await?;
+        let results = self.send_search_request(target_node, &node_address, search_request).await?;
         
         // 转换结果格式
         let internal_results = results.into_iter().map(|r| crate::types::InternalSearchResult {

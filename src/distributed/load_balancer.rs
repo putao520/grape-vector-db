@@ -508,7 +508,7 @@ impl IntelligentLoadBalancer {
         }
 
         let expected_per_node = total_requests as f64 / node_count as f64;
-        let mut max_deviation = 0.0;
+        let mut max_deviation: f64 = 0.0;
         let mut distributions = HashMap::new();
 
         for (node_id, &count) in stats.iter() {

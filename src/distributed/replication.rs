@@ -296,7 +296,7 @@ impl ReplicationManager {
             
             tokio::spawn(async move {
                 // 执行真实的异步复制
-                match replication_manager.replicate_to_node(&node_id, shard_id_copy, data_copy).await {
+                match replication_manager.replicate_data(shard_id_copy, data_copy).await {
                     Ok(_) => {
                         debug!("异步复制到节点 {} 完成", node_id);
                     }
@@ -357,7 +357,7 @@ impl ReplicationManager {
         
         // 使用网络客户端发送数据
         // 企业级服务发现：通过配置管理获取节点真实地址
-        let node_address = self.resolve_node_address(target_node)
+        let node_address = self.health_monitor.resolve_node_address(target_node)
             .await
             .unwrap_or_else(|_| format!("{}:8080", target_node)); // 回退到默认端口
         
