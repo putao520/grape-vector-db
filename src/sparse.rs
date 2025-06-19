@@ -1,5 +1,5 @@
 //! 稀疏向量索引和BM25搜索引擎实现
-//! 
+//!
 //! 本模块提供：
 //! - 稀疏向量的倒排索引
 //! - BM25算法实现
@@ -7,14 +7,12 @@
 //! - 高效的稀疏向量存储和查询
 
 use crate::{
-    types::{
-        SparseVector, DocumentSparseRepresentation, BM25Stats
-    },
     errors::Result,
+    types::{BM25Stats, DocumentSparseRepresentation, SparseVector},
 };
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 倒排索引中的条目
@@ -50,10 +48,7 @@ pub struct BM25Parameters {
 
 impl Default for BM25Parameters {
     fn default() -> Self {
-        Self {
-            k1: 1.2,
-            b: 0.75,
-        }
+        Self { k1: 1.2, b: 0.75 }
     }
 }
 
@@ -96,14 +91,14 @@ impl SparseIndex {
         // 更新全局统计信息
         stats.total_documents += 1;
         stats.vocabulary_size = stats.document_frequencies.len();
-        
+
         // 重新计算平均文档长度
         let total_length: f32 = inverted_index
             .values()
             .flat_map(|entries| entries.iter())
             .map(|entry| entry.document_length)
             .sum();
-        
+
         if stats.total_documents > 0 {
             stats.average_document_length = total_length / stats.total_documents as f32;
         }
@@ -119,10 +114,13 @@ impl SparseIndex {
 
         // 从倒排索引中删除文档
         for (term_id, entries) in inverted_index.iter_mut() {
-            if let Some(pos) = entries.iter().position(|entry| entry.document_id == document_id) {
+            if let Some(pos) = entries
+                .iter()
+                .position(|entry| entry.document_id == document_id)
+            {
                 entries.remove(pos);
                 removed = true;
-                
+
                 // 如果这是最后一个包含该词的文档，更新文档频率
                 if entries.is_empty() {
                     stats.document_frequencies.remove(term_id);
@@ -133,14 +131,14 @@ impl SparseIndex {
         if removed {
             stats.total_documents = stats.total_documents.saturating_sub(1);
             stats.vocabulary_size = stats.document_frequencies.len();
-            
+
             // 重新计算平均文档长度
             let total_length: f32 = inverted_index
                 .values()
                 .flat_map(|entries| entries.iter())
                 .map(|entry| entry.document_length)
                 .sum();
-            
+
             if stats.total_documents > 0 {
                 stats.average_document_length = total_length / stats.total_documents as f32;
             } else {
@@ -152,7 +150,11 @@ impl SparseIndex {
     }
 
     /// 使用BM25算法搜索相关文档
-    pub fn search_bm25(&self, query_vector: &SparseVector, limit: usize) -> Result<Vec<(String, f32)>> {
+    pub fn search_bm25(
+        &self,
+        query_vector: &SparseVector,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>> {
         let inverted_index = self.inverted_index.read();
         let stats = self.bm25_stats.read();
 
@@ -165,7 +167,11 @@ impl SparseIndex {
         // 对查询向量中的每个词计算BM25分数
         for (&term_id, &query_tf) in query_vector.indices.iter().zip(query_vector.values.iter()) {
             if let Some(doc_list) = inverted_index.get(&term_id) {
-                let df = stats.document_frequencies.get(&term_id).copied().unwrap_or(1);
+                let df = stats
+                    .document_frequencies
+                    .get(&term_id)
+                    .copied()
+                    .unwrap_or(1);
                 let idf = self.calculate_idf(stats.total_documents, df);
 
                 for entry in doc_list {
@@ -177,7 +183,9 @@ impl SparseIndex {
                         idf,
                     );
 
-                    *document_scores.entry(entry.document_id.clone()).or_insert(0.0) += bm25_score;
+                    *document_scores
+                        .entry(entry.document_id.clone())
+                        .or_insert(0.0) += bm25_score;
                 }
             }
         }
@@ -207,8 +215,8 @@ impl SparseIndex {
         let k1 = self.bm25_params.k1;
         let b = self.bm25_params.b;
 
-        let tf_component = (doc_tf * (k1 + 1.0)) / 
-            (doc_tf + k1 * (1.0 - b + b * (doc_length / avg_doc_length)));
+        let tf_component =
+            (doc_tf * (k1 + 1.0)) / (doc_tf + k1 * (1.0 - b + b * (doc_length / avg_doc_length)));
 
         query_tf * tf_component * idf
     }
@@ -238,7 +246,8 @@ impl SparseIndex {
         let stats = self.bm25_stats.read();
 
         // 估算倒排索引的内存使用
-        let index_size = inverted_index.iter()
+        let index_size = inverted_index
+            .iter()
             .map(|(_, entries)| {
                 std::mem::size_of::<u32>() + // term_id
                 entries.len() * std::mem::size_of::<InvertedIndexEntry>()
@@ -246,8 +255,9 @@ impl SparseIndex {
             .sum::<usize>();
 
         // 估算统计信息的内存使用
-        let stats_size = std::mem::size_of::<BM25Stats>() + 
-            stats.document_frequencies.len() * (std::mem::size_of::<u32>() + std::mem::size_of::<usize>());
+        let stats_size = std::mem::size_of::<BM25Stats>()
+            + stats.document_frequencies.len()
+                * (std::mem::size_of::<u32>() + std::mem::size_of::<usize>());
 
         (index_size + stats_size) as f64 / (1024.0 * 1024.0)
     }
@@ -263,11 +273,13 @@ impl SimpleTokenizer {
     /// 创建新的分词器
     pub fn new() -> Self {
         let stop_words = [
-            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-            "has", "he", "in", "is", "it", "its", "of", "on", "that", "the",
-            "to", "was", "will", "with", "的", "了", "在", "是", "有", "和",
-            "与", "或", "但", "而", "这", "那", "一", "不", "也", "就"
-        ].iter().map(|s| s.to_string()).collect();
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he", "in",
+            "is", "it", "its", "of", "on", "that", "the", "to", "was", "will", "with", "的", "了",
+            "在", "是", "有", "和", "与", "或", "但", "而", "这", "那", "一", "不", "也", "就",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
         Self { stop_words }
     }
@@ -285,11 +297,7 @@ impl SimpleTokenizer {
                     .filter(|c| c.is_alphanumeric() || c.is_ascii_alphabetic())
                     .collect::<String>()
             })
-            .filter(|word| {
-                !word.is_empty() 
-                && word.len() > 1 
-                && !self.stop_words.contains(word)
-            })
+            .filter(|word| !word.is_empty() && word.len() > 1 && !self.stop_words.contains(word))
             .collect();
 
         let total_tokens = tokens.len() as f32;
@@ -324,10 +332,10 @@ impl SimpleTokenizer {
 
     /// 将文档转换为稀疏向量
     pub fn document_to_sparse_vector(
-        &self, 
+        &self,
         document_id: &str,
-        text: &str, 
-        vocabulary: &HashMap<String, u32>
+        text: &str,
+        vocabulary: &HashMap<String, u32>,
     ) -> Result<DocumentSparseRepresentation> {
         let term_frequencies = self.tokenize(text);
         let document_length = term_frequencies.values().sum::<f32>();
@@ -347,14 +355,10 @@ impl SimpleTokenizer {
         // 按索引排序
         let mut pairs: Vec<_> = indices.into_iter().zip(values).collect();
         pairs.sort_by_key(|&(idx, _)| idx);
-        
+
         let (sorted_indices, sorted_values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
 
-        let sparse_vector = SparseVector::new(
-            sorted_indices, 
-            sorted_values, 
-            vocabulary.len()
-        )?;
+        let sparse_vector = SparseVector::new(sorted_indices, sorted_values, vocabulary.len())?;
 
         Ok(DocumentSparseRepresentation {
             document_id: document_id.to_string(),
@@ -377,17 +381,9 @@ mod tests {
 
     #[test]
     fn test_sparse_vector_operations() {
-        let vec1 = SparseVector::new(
-            vec![0, 2, 4], 
-            vec![1.0, 2.0, 3.0], 
-            10
-        ).unwrap();
-        
-        let vec2 = SparseVector::new(
-            vec![1, 2, 3], 
-            vec![1.0, 2.0, 1.0], 
-            10
-        ).unwrap();
+        let vec1 = SparseVector::new(vec![0, 2, 4], vec![1.0, 2.0, 3.0], 10).unwrap();
+
+        let vec2 = SparseVector::new(vec![1, 2, 3], vec![1.0, 2.0, 1.0], 10).unwrap();
 
         assert_eq!(vec1.dot_product(&vec2), 4.0); // 只有索引2重叠: 2.0 * 2.0 = 4.0
         assert!(vec1.cosine_similarity(&vec2) > 0.0);
@@ -397,31 +393,29 @@ mod tests {
     fn test_simple_tokenizer() {
         let tokenizer = SimpleTokenizer::new();
         let tokens = tokenizer.tokenize("This is a test document with some words.");
-        
+
         assert!(tokens.contains_key("test"));
         assert!(tokens.contains_key("document"));
         assert!(!tokens.contains_key("is")); // 停用词应该被过滤
-        assert!(!tokens.contains_key("a"));  // 停用词应该被过滤
+        assert!(!tokens.contains_key("a")); // 停用词应该被过滤
     }
 
     #[test]
     fn test_sparse_index() {
         let index = SparseIndex::new(BM25Parameters::default());
         let tokenizer = SimpleTokenizer::new();
-        
+
         let docs = vec!["test document", "another test"];
         let vocabulary = tokenizer.build_vocabulary(&docs);
-        
-        let sparse_doc = tokenizer.document_to_sparse_vector(
-            "doc1", 
-            "test document", 
-            &vocabulary
-        ).unwrap();
-        
+
+        let sparse_doc = tokenizer
+            .document_to_sparse_vector("doc1", "test document", &vocabulary)
+            .unwrap();
+
         index.add_document(&sparse_doc).unwrap();
-        
+
         let stats = index.get_stats();
         assert_eq!(stats.total_documents, 1);
         assert!(stats.vocabulary_size > 0);
     }
-} 
+}

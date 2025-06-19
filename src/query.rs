@@ -1,15 +1,15 @@
 use crate::{
-    types::*, 
-    config::VectorDbConfig, 
-    storage::VectorStore, 
+    config::VectorDbConfig,
+    errors::{Result, VectorDbError},
     index::{HnswVectorIndex, VectorIndex},
     metrics::{MetricsCollector, QueryTimer},
-    errors::{Result, VectorDbError}
+    storage::VectorStore,
+    types::*,
 };
-use std::sync::Arc;
 use parking_lot::Mutex;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 索引持久化数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +54,9 @@ impl QueryEngine {
         let _timer = QueryTimer::new(self.metrics.clone());
 
         // 添加到向量索引
-        self.hnsw_index.lock().add_vector(record.id.clone(), record.embedding.clone())?;
+        self.hnsw_index
+            .lock()
+            .add_vector(record.id.clone(), record.embedding.clone())?;
 
         Ok(())
     }
@@ -93,7 +95,6 @@ impl QueryEngine {
             }
         }
 
-
         // 简单文本搜索（使用分页避免内存问题）
         if let Some(text) = query_text {
             let text_lower = text.to_lowercase();
@@ -101,55 +102,54 @@ impl QueryEngine {
             let page_size = 500;
             let mut offset = 0;
             let max_docs = 5000; // 限制最大搜索文档数
-            
+
             while offset < max_docs && text_results.len() < limit {
                 let doc_ids = store.list_document_ids(offset, page_size).await?;
-                
+
                 if doc_ids.is_empty() {
                     break;
                 }
-                
+
                 for doc_id in doc_ids {
                     if let Some(doc) = store.get_document(&doc_id).await? {
-                    let content_lower = doc.content.to_lowercase();
-                    let title_lower = doc.title.to_lowercase();
-                    
+                        let content_lower = doc.content.to_lowercase();
+                        let title_lower = doc.title.to_lowercase();
 
-                    // 简单的文本匹配评分
-                    let mut score = 0.0;
-                    if title_lower.contains(&text_lower) {
-                        score += 2.0; // 标题匹配权重更高
-                    }
-                    if content_lower.contains(&text_lower) {
-                        score += 1.0;
-                    }
-                    
-                    if score > 0.0 {
-                        text_results.push((doc.id.clone(), score));
-                    }
+                        // 简单的文本匹配评分
+                        let mut score = 0.0;
+                        if title_lower.contains(&text_lower) {
+                            score += 2.0; // 标题匹配权重更高
+                        }
+                        if content_lower.contains(&text_lower) {
+                            score += 1.0;
+                        }
+
+                        if score > 0.0 {
+                            text_results.push((doc.id.clone(), score));
+                        }
                     }
                 }
-                
-                offset += page_size;
 
+                offset += page_size;
             }
-            
+
             // 对文本搜索结果进行排序和权重计算
             text_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             for (i, (doc_id, score)) in text_results.iter().enumerate() {
-                let weighted_score = score * text_weight * (1.0 - i as f32 / text_results.len().max(1) as f32);
+                let weighted_score =
+                    score * text_weight * (1.0 - i as f32 / text_results.len().max(1) as f32);
                 text_results_map.insert(doc_id.clone(), weighted_score);
             }
         }
 
         // 合并结果
         let mut combined_scores = HashMap::new();
-        
+
         // 添加向量搜索结果
         for (doc_id, score) in vector_results {
             combined_scores.insert(doc_id, score);
         }
-        
+
         // 添加或合并文本搜索结果
         for (doc_id, score) in text_results_map {
             *combined_scores.entry(doc_id).or_insert(0.0) += score;
@@ -167,7 +167,7 @@ impl QueryEngine {
                 } else {
                     None
                 };
-                
+
                 let result = SearchResult {
                     document: doc,
                     score,
@@ -188,7 +188,8 @@ impl QueryEngine {
         query_vector: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        self.search(store, Some(query_vector), None, limit, 1.0, 0.0).await
+        self.search(store, Some(query_vector), None, limit, 1.0, 0.0)
+            .await
     }
 
     /// 纯文本搜索
@@ -198,38 +199,42 @@ impl QueryEngine {
         query_text: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        self.search(store, None, Some(query_text), limit, 0.0, 1.0).await
+        self.search(store, None, Some(query_text), limit, 0.0, 1.0)
+            .await
     }
 
     /// 提取内容摘要
     fn extract_snippet(&self, content: &str, query_text: Option<&str>) -> String {
         let max_length = 200;
-        
+
         if let Some(query) = query_text {
             // 尝试找到包含查询词的片段
             let query_lower = query.to_lowercase();
             let content_lower = content.to_lowercase();
-            
+
             if let Some(_pos) = content_lower.find(&query_lower) {
                 // 使用字符索引而不是字节索引来避免UTF-8边界问题
                 let chars: Vec<char> = content.chars().collect();
                 let content_lower_chars: Vec<char> = content_lower.chars().collect();
-                
+
                 // 找到查询词在字符数组中的位置
                 let mut char_pos = 0;
-                for (i, window) in content_lower_chars.windows(query.chars().count()).enumerate() {
+                for (i, window) in content_lower_chars
+                    .windows(query.chars().count())
+                    .enumerate()
+                {
                     let window_str: String = window.iter().collect();
                     if window_str == query_lower {
                         char_pos = i;
                         break;
                     }
                 }
-                
+
                 let start_char = char_pos.saturating_sub(50);
                 let end_char = (char_pos + query.chars().count() + 150).min(chars.len());
-                
+
                 let snippet: String = chars[start_char..end_char].iter().collect();
-                
+
                 if snippet.chars().count() > max_length {
                     let truncated: String = snippet.chars().take(max_length).collect();
                     format!("...{}", truncated)
@@ -251,13 +256,14 @@ impl QueryEngine {
     /// 重建索引
     pub async fn rebuild_index(&self) -> Result<()> {
         let start_time = std::time::Instant::now();
-        
+
         // 重建向量索引
         self.hnsw_index.lock().build_index()?;
-        
+
         let elapsed = start_time.elapsed();
-        self.metrics.record_index_build_time(elapsed.as_secs_f64() * 1000.0);
-        
+        self.metrics
+            .record_index_build_time(elapsed.as_secs_f64() * 1000.0);
+
         Ok(())
     }
 
@@ -276,13 +282,13 @@ impl QueryEngine {
     pub async fn save_index(&self, path: &std::path::Path) -> Result<()> {
         use std::fs;
         use std::io::Write;
-        
+
         // 创建目录结构
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| VectorDbError::Storage(format!("创建索引目录失败: {}", e)))?;
         }
-        
+
         // 获取索引数据
         let index_data = {
             let index = self.hnsw_index.lock();
@@ -293,35 +299,38 @@ impl QueryEngine {
                 created_at: chrono::Utc::now(),
                 config: self.config.hnsw.clone(),
             };
-            
-            IndexPersistenceData {
-                metadata,
-                vectors,
-            }
+
+            IndexPersistenceData { metadata, vectors }
         };
-        
+
         // 序列化并压缩数据
         let serialized = postcard::to_allocvec(&index_data)
             .map_err(|e| VectorDbError::Storage(format!("索引序列化失败: {}", e)))?;
-            
+
         let compressed = {
-            use flate2::Compression;
             use flate2::write::GzEncoder;
+            use flate2::Compression;
             let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(&serialized)
+            encoder
+                .write_all(&serialized)
                 .map_err(|e| VectorDbError::Storage(format!("索引压缩失败: {}", e)))?;
-            encoder.finish()
+            encoder
+                .finish()
                 .map_err(|e| VectorDbError::Storage(format!("索引压缩完成失败: {}", e)))?
         };
-        
+
         // 写入文件
         fs::write(path, &compressed)
             .map_err(|e| VectorDbError::Storage(format!("索引文件写入失败: {}", e)))?;
-            
+
         // 记录指标
         self.metrics.record_index_save(compressed.len(), path).await;
-        
-        tracing::info!("索引已保存到 {:?}, 压缩大小: {} bytes", path, compressed.len());
+
+        tracing::info!(
+            "索引已保存到 {:?}, 压缩大小: {} bytes",
+            path,
+            compressed.len()
+        );
         Ok(())
     }
 
@@ -329,32 +338,34 @@ impl QueryEngine {
     pub async fn load_index(&self, path: &std::path::Path) -> Result<()> {
         use std::fs;
         use std::io::Read;
-        
+
         // 检查文件是否存在
         if !path.exists() {
-            return Err(VectorDbError::Storage(
-                format!("索引文件不存在: {:?}", path)
-            ));
+            return Err(VectorDbError::Storage(format!(
+                "索引文件不存在: {:?}",
+                path
+            )));
         }
-        
+
         // 读取文件
         let compressed_data = fs::read(path)
             .map_err(|e| VectorDbError::Storage(format!("读取索引文件失败: {}", e)))?;
-            
+
         // 解压缩数据
         let decompressed = {
             use flate2::read::GzDecoder;
             let mut decoder = GzDecoder::new(&compressed_data[..]);
             let mut buffer = Vec::new();
-            decoder.read_to_end(&mut buffer)
+            decoder
+                .read_to_end(&mut buffer)
                 .map_err(|e| VectorDbError::Storage(format!("索引解压失败: {}", e)))?;
             buffer
         };
-        
+
         // 反序列化数据
         let index_data: IndexPersistenceData = postcard::from_bytes(&decompressed)
             .map_err(|e| VectorDbError::Storage(format!("索引反序列化失败: {}", e)))?;
-            
+
         // 验证元数据兼容性
         if index_data.metadata.dimension != self.config.vector_dimension {
             return Err(VectorDbError::DimensionMismatch {
@@ -362,33 +373,35 @@ impl QueryEngine {
                 actual: index_data.metadata.dimension,
             });
         }
-        
+
         // 重建索引
         {
             let mut index = self.hnsw_index.lock();
-            
+
             // 清空现有索引
             *index = HnswVectorIndex::with_config(
                 self.config.hnsw.clone(),
                 self.config.vector_dimension,
             );
-            
+
             // 添加所有向量
             for (id, vector) in index_data.vectors {
                 index.add_vector(id, vector)?;
             }
         }
-        
+
         // 记录指标
-        self.metrics.record_index_load(
-            compressed_data.len(), 
-            index_data.metadata.total_points,
-            path
-        ).await;
-        
+        self.metrics
+            .record_index_load(
+                compressed_data.len(),
+                index_data.metadata.total_points,
+                path,
+            )
+            .await;
+
         tracing::info!(
-            "索引已从 {:?} 加载, 向量数量: {}, 维度: {}", 
-            path, 
+            "索引已从 {:?} 加载, 向量数量: {}, 维度: {}",
+            path,
             index_data.metadata.total_points,
             index_data.metadata.dimension
         );
@@ -409,18 +422,18 @@ pub struct IndexStats {
 mod tests {
     use super::*;
     use crate::storage::BasicVectorStore;
-    
+
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_query_engine() {
         let temp_dir = TempDir::new().unwrap();
-        let config = VectorDbConfig { 
+        let config = VectorDbConfig {
             vector_dimension: 3, // Use smaller dimension for testing
-            ..Default::default() 
+            ..Default::default()
         };
         let metrics = Arc::new(MetricsCollector::new());
-        
+
         let engine = QueryEngine::new(&config, metrics).unwrap();
         let mut store = BasicVectorStore::new(temp_dir.path().to_str().unwrap()).unwrap();
 
@@ -461,8 +474,11 @@ mod tests {
         engine.rebuild_index().await.unwrap();
 
         // 测试向量搜索
-        let results = engine.vector_search(&store, &[1.0, 0.1, 0.0], 5).await.unwrap();
+        let results = engine
+            .vector_search(&store, &[1.0, 0.1, 0.0], 5)
+            .await
+            .unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].document.id, "test1");
     }
-} 
+}

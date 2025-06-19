@@ -3,8 +3,8 @@
 //! 此示例演示如何使用不同的融合策略进行性能基准测试
 
 use grape_vector_db::{
-    hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext},
-    types::{Document, QueryMetrics},
+    hybrid::{FusionContext, FusionModel, QueryType, StatisticalFusionModel, TimeContext},
+    types::Document,
     VectorDatabase, VectorDbConfig,
 };
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. 初始化数据库
     let config = VectorDbConfig::default();
     let data_dir = PathBuf::from("./temp_demo_db");
-    let mut db = VectorDatabase::new(data_dir, config).await?;
+    let db = VectorDatabase::new(data_dir, config).await?;
 
     // 2. 准备测试数据
     let test_documents = generate_test_documents();
@@ -212,11 +212,11 @@ async fn run_simple_benchmark_with_weights(
     db: &VectorDatabase,
     strategy_name: &str,
     _test_docs: &[Document],
-    dense_weight: f32,
-    sparse_weight: f32,
-    text_weight: f32,
+    _dense_weight: f32,
+    _sparse_weight: f32,
+    _text_weight: f32,
 ) -> Result<SimpleBenchmarkResult, Box<dyn std::error::Error>> {
-    let test_queries = vec![
+    let test_queries = [
         "向量数据库搜索",
         "机器学习算法",
         "深度学习神经网络",

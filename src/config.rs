@@ -169,19 +169,19 @@ impl Default for SparseVectorConfig {
 pub struct VectorDbConfig {
     /// 向量维度
     pub vector_dimension: usize,
-    
+
     /// HNSW 配置
     pub hnsw: HnswConfig,
-    
+
     /// 嵌入提供者配置
     pub embedding: EmbeddingConfig,
-    
+
     /// 缓存配置
     pub cache: CacheConfig,
-    
+
     /// 持久化配置
     pub persistence: PersistenceConfig,
-    
+
     /// 查询配置
     pub query: QueryConfig,
 
@@ -196,13 +196,13 @@ pub struct VectorDbConfig {
 pub struct HnswConfig {
     /// 构建时的连接数
     pub m: usize,
-    
+
     /// 构建时的候选数
     pub ef_construction: usize,
-    
+
     /// 搜索时的候选数
     pub ef_search: usize,
-    
+
     /// 最大层数
     pub max_layers: usize,
 }
@@ -212,31 +212,31 @@ pub struct HnswConfig {
 pub struct EmbeddingConfig {
     /// 提供者类型 (openai, azure, nvidia, huggingface, local, mock)
     pub provider: String,
-    
+
     /// API 端点URL (支持自定义端点)
     pub endpoint: Option<String>,
-    
+
     /// API 密钥或token
     pub api_key: Option<String>,
-    
+
     /// 模型名称
     pub model: String,
-    
+
     /// API 版本（用于Azure等服务）
     pub api_version: Option<String>,
-    
+
     /// 自定义请求头
     pub headers: HashMap<String, String>,
-    
+
     /// 批量大小
     pub batch_size: usize,
-    
+
     /// 请求超时（秒）
     pub timeout_seconds: u64,
-    
+
     /// 重试次数
     pub retry_attempts: u32,
-    
+
     /// 向量维度（如果已知）
     pub dimension: Option<usize>,
 }
@@ -246,10 +246,10 @@ pub struct EmbeddingConfig {
 pub struct CacheConfig {
     /// 嵌入缓存大小
     pub embedding_cache_size: usize,
-    
+
     /// 查询结果缓存大小
     pub query_cache_size: usize,
-    
+
     /// 缓存TTL（秒）
     pub cache_ttl_seconds: u64,
 }
@@ -259,13 +259,13 @@ pub struct CacheConfig {
 pub struct PersistenceConfig {
     /// 数据目录
     pub data_dir: String,
-    
+
     /// 自动保存间隔（秒）
     pub auto_save_interval_seconds: u64,
-    
+
     /// 压缩选项
     pub compression: bool,
-    
+
     /// 备份选项
     pub backup: bool,
 }
@@ -275,13 +275,13 @@ pub struct PersistenceConfig {
 pub struct QueryConfig {
     /// 默认搜索限制
     pub default_limit: usize,
-    
+
     /// 最大搜索限制
     pub max_limit: usize,
-    
+
     /// 混合搜索权重
     pub hybrid_weights: HybridWeights,
-    
+
     /// 相似度阈值
     pub similarity_threshold: f32,
 }
@@ -351,7 +351,7 @@ impl SystemConfig {
                 "system_config.toml",
                 "./config/system_config.toml",
             ];
-            
+
             for path in config_paths {
                 if Path::new(path).exists() {
                     match Self::load_from_file(path) {
@@ -365,19 +365,19 @@ impl SystemConfig {
                     }
                 }
             }
-            
+
             tracing::info!("📝 使用默认配置");
             Self::default()
         })
     }
-    
+
     /// 从文件加载配置
     fn load_from_file(path: &str) -> Result<SystemConfig> {
         let content = std::fs::read_to_string(path)?;
         let config: SystemConfig = toml::from_str(&content)?;
         Ok(config)
     }
-    
+
     /// 获取全局配置实例
     pub fn get() -> &'static SystemConfig {
         SYSTEM_CONFIG.get().unwrap_or_else(|| {
@@ -385,7 +385,7 @@ impl SystemConfig {
             Self::load()
         })
     }
-    
+
     /// 保存配置到文件
     pub fn save_to_file(&self, path: &str) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
@@ -468,4 +468,4 @@ impl Default for QueryConfig {
             similarity_threshold: 0.5,
         }
     }
-} 
+}

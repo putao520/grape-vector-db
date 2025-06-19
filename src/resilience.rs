@@ -2,12 +2,12 @@
 //!
 //! 提供企业级应用所需的错误处理、重试机制、熔断器、限流和监控功能
 
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use parking_lot::{RwLock, Mutex};
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
@@ -17,22 +17,22 @@ use tokio::time::sleep;
 pub enum ResilienceError {
     #[error("熔断器已打开: {service}")]
     CircuitBreakerOpen { service: String },
-    
+
     #[error("限流触发: 当前QPS {current_qps} 超过限制 {limit}")]
     RateLimitExceeded { current_qps: f64, limit: f64 },
-    
+
     #[error("超时: 操作在 {timeout:?} 内未完成")]
     Timeout { timeout: Duration },
-    
+
     #[error("重试次数已达上限: {attempts}")]
     MaxRetriesExceeded { attempts: usize },
-    
+
     #[error("服务不可用: {service}")]
     ServiceUnavailable { service: String },
-    
+
     #[error("资源池耗尽: {resource}")]
     ResourcePoolExhausted { resource: String },
-    
+
     #[error("依赖服务错误: {service} - {error}")]
     DependencyError { service: String, error: String },
 }
@@ -107,8 +107,9 @@ impl CircuitBreaker {
     /// 检查是否允许请求通过
     pub fn allow_request(&self) -> bool {
         *self.last_request_time.write() = Some(Instant::now());
-        
-        match *self.state.read() {
+
+        let current_state = self.state.read().clone();
+        match current_state {
             CircuitBreakerState::Closed => true,
             CircuitBreakerState::Open => {
                 // 检查是否可以进入半开状态
@@ -133,8 +134,9 @@ impl CircuitBreaker {
     /// 记录成功的请求
     pub fn record_success(&self) {
         self.success_count.fetch_add(1, Ordering::Relaxed);
-        
-        match *self.state.read() {
+
+        let current_state = self.state.read().clone();
+        match current_state {
             CircuitBreakerState::HalfOpen => {
                 // 在半开状态下，如果成功请求足够多，则关闭熔断器
                 let success_count = self.success_count.load(Ordering::Relaxed);
@@ -153,8 +155,9 @@ impl CircuitBreaker {
     pub fn record_failure(&self) {
         self.failure_count.fetch_add(1, Ordering::Relaxed);
         *self.last_failure_time.write() = Some(Instant::now());
-        
-        match *self.state.read() {
+
+        let current_state = self.state.read().clone();
+        match current_state {
             CircuitBreakerState::HalfOpen => {
                 // 在半开状态下失败，立即回到打开状态
                 self.transition_to_open();
@@ -289,7 +292,7 @@ impl TokenBucketRateLimiter {
     /// 尝试获取令牌
     pub fn try_acquire(&self, tokens: usize) -> bool {
         self.refill_tokens();
-        
+
         let mut current_tokens = self.tokens.lock();
         if *current_tokens >= tokens as f64 {
             *current_tokens -= tokens as f64;
@@ -303,17 +306,17 @@ impl TokenBucketRateLimiter {
     pub async fn acquire(&self, tokens: usize) -> ResilienceResult<()> {
         let mut attempts = 0;
         const MAX_ATTEMPTS: usize = 10;
-        
+
         while attempts < MAX_ATTEMPTS {
             if self.try_acquire(tokens) {
                 return Ok(());
             }
-            
+
             attempts += 1;
             let wait_time = Duration::from_millis(100 * attempts as u64);
             sleep(wait_time).await;
         }
-        
+
         Err(ResilienceError::RateLimitExceeded {
             current_qps: self.config.requests_per_second,
             limit: self.config.requests_per_second,
@@ -325,11 +328,13 @@ impl TokenBucketRateLimiter {
         let now = Instant::now();
         let mut last_refill = self.last_refill.lock();
         let elapsed = now.duration_since(*last_refill);
-        
-        if elapsed >= Duration::from_millis(100) { // 每100ms重新填充一次
+
+        if elapsed >= Duration::from_millis(100) {
+            // 每100ms重新填充一次
             let tokens_to_add = elapsed.as_secs_f64() * self.config.requests_per_second;
             let mut current_tokens = self.tokens.lock();
-            *current_tokens = (*current_tokens + tokens_to_add).min(self.config.bucket_capacity as f64);
+            *current_tokens =
+                (*current_tokens + tokens_to_add).min(self.config.bucket_capacity as f64);
             *last_refill = now;
         }
     }
@@ -413,31 +418,37 @@ impl RetryExecutor {
         E: std::fmt::Display,
     {
         let mut last_error = None;
-        
+
         for attempt in 0..self.config.max_attempts {
             match operation().await {
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     let error_msg = error.to_string();
-                    let is_retryable = self.config.retryable_errors.iter()
+                    let is_retryable = self
+                        .config
+                        .retryable_errors
+                        .iter()
                         .any(|retryable| error_msg.contains(retryable));
-                    
+
                     if !is_retryable || attempt == self.config.max_attempts - 1 {
                         return Err(error);
                     }
-                    
+
                     let delay = self.calculate_delay(attempt);
                     tracing::warn!(
                         "操作失败，将在 {:?} 后重试 (尝试 {}/{}): {}",
-                        delay, attempt + 1, self.config.max_attempts, error_msg
+                        delay,
+                        attempt + 1,
+                        self.config.max_attempts,
+                        error_msg
                     );
-                    
+
                     sleep(delay).await;
                     last_error = Some(error);
                 }
             }
         }
-        
+
         Err(last_error.unwrap())
     }
 
@@ -445,13 +456,18 @@ impl RetryExecutor {
     fn calculate_delay(&self, attempt: usize) -> Duration {
         match &self.config.strategy {
             RetryStrategy::FixedDelay(delay) => *delay,
-            RetryStrategy::ExponentialBackoff { initial_delay, max_delay, multiplier } => {
+            RetryStrategy::ExponentialBackoff {
+                initial_delay,
+                max_delay,
+                multiplier,
+            } => {
                 let delay = initial_delay.as_millis() as f64 * multiplier.powi(attempt as i32);
                 Duration::from_millis(delay.min(max_delay.as_millis() as f64) as u64)
             }
-            RetryStrategy::LinearBackoff { initial_delay, increment } => {
-                *initial_delay + *increment * attempt as u32
-            }
+            RetryStrategy::LinearBackoff {
+                initial_delay,
+                increment,
+            } => *initial_delay + *increment * attempt as u32,
         }
     }
 }
@@ -473,7 +489,8 @@ impl TimeoutWrapper {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = T>,
     {
-        self.execute_with_timeout(operation, self.default_timeout).await
+        self.execute_with_timeout(operation, self.default_timeout)
+            .await
     }
 
     /// 执行带自定义超时的异步操作
@@ -514,10 +531,13 @@ impl<T> ResourcePool<T> {
 
     /// 从池中获取资源
     pub async fn acquire(&self) -> ResilienceResult<PooledResource<T>> {
-        let _permit = self.semaphore.acquire().await
-            .map_err(|_| ResilienceError::ResourcePoolExhausted { 
-                resource: self.name.clone() 
-            })?;
+        let _permit =
+            self.semaphore
+                .acquire()
+                .await
+                .map_err(|_| ResilienceError::ResourcePoolExhausted {
+                    resource: self.name.clone(),
+                })?;
 
         let resource = {
             let mut resources = self.resources.lock();
@@ -682,15 +702,18 @@ impl ResilienceManager {
         let retry_executor = self.retry_executor.clone();
         let circuit_breaker = self.get_circuit_breaker(service_name);
 
-        let result = retry_executor.execute(|| {
-            let op = operation.clone();
-            let tw = timeout_wrapper.clone();
-            async move {
-                tw.execute(op).await
-                    .map_err(|e| format!("{:?}", e))
-                    .and_then(|r| r.map_err(|e| e.to_string()))
-            }
-        }).await;
+        let result = retry_executor
+            .execute(|| {
+                let op = operation.clone();
+                let tw = timeout_wrapper.clone();
+                async move {
+                    tw.execute(op)
+                        .await
+                        .map_err(|e| format!("{:?}", e))
+                        .and_then(|r| r.map_err(|e| e.to_string()))
+                }
+            })
+            .await;
 
         // 更新熔断器状态
         if let Some(cb) = circuit_breaker {
@@ -713,10 +736,12 @@ impl ResilienceManager {
         let resource_pools = self.resource_pools.read();
 
         ResilienceStatus {
-            circuit_breakers: circuit_breakers.iter()
+            circuit_breakers: circuit_breakers
+                .iter()
                 .map(|(name, cb)| (name.clone(), cb.get_stats()))
                 .collect(),
-            rate_limiters: rate_limiters.iter()
+            rate_limiters: rate_limiters
+                .iter()
                 .map(|(name, rl)| (name.clone(), rl.get_available_tokens()))
                 .collect(),
             resource_pools: resource_pools.clone(),
@@ -748,28 +773,28 @@ mod tests {
             sleep_window: Duration::from_millis(100),
             half_open_max_requests: 1,
         };
-        
+
         let cb = CircuitBreaker::new("test_service".to_string(), config);
-        
+
         // 初始状态应该是关闭的
         assert_eq!(cb.get_state(), CircuitBreakerState::Closed);
         assert!(cb.allow_request());
-        
+
         // 记录失败
         cb.record_failure();
         cb.record_failure();
-        
+
         // 应该触发熔断器打开
         assert_eq!(cb.get_state(), CircuitBreakerState::Open);
         assert!(!cb.allow_request());
-        
+
         // 等待恢复时间
         sleep(Duration::from_millis(150)).await;
-        
+
         // 应该进入半开状态
         assert!(cb.allow_request());
         assert_eq!(cb.get_state(), CircuitBreakerState::HalfOpen);
-        
+
         // 记录成功，应该关闭熔断器
         cb.record_success();
         assert_eq!(cb.get_state(), CircuitBreakerState::Closed);
@@ -782,16 +807,16 @@ mod tests {
             bucket_capacity: 10,
             burst_size: 5,
         };
-        
+
         let rl = TokenBucketRateLimiter::new(config);
-        
+
         // 应该能够获取初始令牌
         assert!(rl.try_acquire(5));
         assert!(rl.try_acquire(5));
-        
+
         // 应该无法获取更多令牌
         assert!(!rl.try_acquire(1));
-        
+
         // 等待令牌重新填充
         sleep(Duration::from_millis(200)).await;
         assert!(rl.try_acquire(1));
@@ -804,22 +829,25 @@ mod tests {
             strategy: RetryStrategy::FixedDelay(Duration::from_millis(10)),
             retryable_errors: vec!["test_error".to_string()],
         };
-        
+
         let executor = RetryExecutor::new(config);
         let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        
-        let result = executor.execute(|| {
-            let count = attempt_count.clone();
-            async move {
-                let current_attempt = count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if current_attempt < 3 {
-                    Err("test_error")
-                } else {
-                    Ok("success")
+
+        let result = executor
+            .execute(|| {
+                let count = attempt_count.clone();
+                async move {
+                    let current_attempt =
+                        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if current_attempt < 3 {
+                        Err("test_error")
+                    } else {
+                        Ok("success")
+                    }
                 }
-            }
-        }).await;
-        
+            })
+            .await;
+
         assert_eq!(result.unwrap(), "success");
         assert_eq!(attempt_count.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
@@ -827,32 +855,36 @@ mod tests {
     #[tokio::test]
     async fn test_timeout_wrapper() {
         let wrapper = TimeoutWrapper::new(Duration::from_millis(100));
-        
+
         // 快速操作应该成功
         let result = wrapper.execute(|| async { "success" }).await;
         assert!(result.is_ok());
-        
+
         // 慢操作应该超时
-        let result = wrapper.execute(|| async {
-            sleep(Duration::from_millis(200)).await;
-            "should_timeout"
-        }).await;
+        let result = wrapper
+            .execute(|| async {
+                sleep(Duration::from_millis(200)).await;
+                "should_timeout"
+            })
+            .await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_resource_pool() {
         let pool: ResourcePool<String> = ResourcePool::new("test_pool".to_string(), 2);
-        
+
         pool.add_resource("resource1".to_string());
         pool.add_resource("resource2".to_string());
-        
+
         let resource1 = pool.acquire().await.unwrap();
         let resource2 = pool.acquire().await.unwrap();
-        
-        assert_eq!(resource1.get(), Some(&"resource1".to_string()));
-        assert_eq!(resource2.get(), Some(&"resource2".to_string()));
-        
+
+        // ResourcePool uses Vec::pop() which is LIFO (Last In, First Out)
+        // So resource2 (added last) is acquired first
+        assert_eq!(resource1.get(), Some(&"resource2".to_string()));
+        assert_eq!(resource2.get(), Some(&"resource1".to_string()));
+
         let stats = pool.get_stats();
         assert_eq!(stats.available, 0);
         assert_eq!(stats.in_use, 2);

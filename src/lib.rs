@@ -143,19 +143,21 @@ pub mod types;
 pub use advanced_storage::{AdvancedStorage, AdvancedStorageConfig};
 pub use embedded::EmbeddedVectorDB;
 pub use enterprise::{
-    AuthenticationManager, EnterpriseConfig, Role, Permission, User, ApiKey, JwtToken,
-    SecurityPolicy, AuditLogEntry, EnterpriseError, EnterpriseResult
+    ApiKey, AuditLogEntry, AuthenticationManager, EnterpriseConfig, EnterpriseError,
+    EnterpriseResult, JwtToken, Permission, Role, SecurityPolicy, User,
 };
-pub use filtering::{FilterEngine, FilterConfig, FilterExpression};
-pub use hybrid::{FusionModel, StatisticalFusionModel, FusionContext, QueryType, TimeContext};
+pub use filtering::{FilterConfig, FilterEngine, FilterExpression};
+pub use hybrid::{FusionContext, FusionModel, QueryType, StatisticalFusionModel, TimeContext};
 pub use index::{FaissIndexType, FaissVectorIndex, HnswVectorIndex, IndexOptimizer, VectorIndex};
 pub use performance::{PerformanceMetrics, PerformanceMonitor};
-pub use quantization::{BinaryQuantizer, BinaryQuantizationConfig, BinaryVector, BinaryVectorStore};
+pub use quantization::{
+    BinaryQuantizationConfig, BinaryQuantizer, BinaryVector, BinaryVectorStore,
+};
 pub use query_engine::{QueryEngine, QueryEngineConfig, QueryOptimizer};
 pub use resilience::{
-    ResilienceManager, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState,
-    TokenBucketRateLimiter, RateLimiterConfig, RetryExecutor, RetryConfig, RetryStrategy,
-    TimeoutWrapper, ResourcePool, ResilienceError, ResilienceResult
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState, RateLimiterConfig, ResilienceError,
+    ResilienceManager, ResilienceResult, ResourcePool, RetryConfig, RetryExecutor, RetryStrategy,
+    TimeoutWrapper, TokenBucketRateLimiter,
 };
 pub use storage::{BasicVectorStore, VectorStore};
 pub use types::*;
@@ -166,10 +168,10 @@ pub mod errors {
     pub type Result<T> = std::result::Result<T, VectorDbError>;
 }
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use crate::performance::PerformanceStats;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 健康状态枚举
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,28 +282,23 @@ impl VectorDatabase {
         enterprise_config: EnterpriseConfig,
     ) -> Result<Self, VectorDbError> {
         let mut db = Self::new(db_path, config).await?;
-        
+
         // 初始化企业级组件
         let auth_manager = Arc::new(AuthenticationManager::new());
-        let resilience_manager = Arc::new(ResilienceManager::new(
-            std::time::Duration::from_secs(30)
-        ));
+        let resilience_manager =
+            Arc::new(ResilienceManager::new(std::time::Duration::from_secs(30)));
 
         // 配置熔断器
-        resilience_manager.register_circuit_breaker(
-            "vector_search".to_string(),
-            CircuitBreakerConfig::default(),
-        );
+        resilience_manager
+            .register_circuit_breaker("vector_search".to_string(), CircuitBreakerConfig::default());
         resilience_manager.register_circuit_breaker(
             "document_insert".to_string(),
             CircuitBreakerConfig::default(),
         );
 
         // 配置限流器
-        resilience_manager.register_rate_limiter(
-            "api_requests".to_string(),
-            RateLimiterConfig::default(),
-        );
+        resilience_manager
+            .register_rate_limiter("api_requests".to_string(), RateLimiterConfig::default());
 
         db.auth_manager = Some(auth_manager);
         db.resilience_manager = Some(resilience_manager);
@@ -326,19 +323,21 @@ impl VectorDatabase {
             return Ok(Vec::new());
         }
 
+        // 验证文档ID
+        for document in &documents {
+            if document.id.is_empty() {
+                return Err(VectorDbError::ValidationError("文档ID不能为空".to_string()));
+            }
+        }
+
         // 预先收集需要索引的向量，避免后续查询
         // 使用预分配的容量来减少重新分配
         let mut vectors_to_index = Vec::with_capacity(documents.len());
-        
+
         for document in &documents {
             if let Some(ref vector) = document.vector {
-                let id = if document.id.is_empty() {
-                    uuid::Uuid::new_v4().to_string()
-                } else {
-                    // 避免不必要的克隆，直接引用字符串内容
-                    document.id.to_owned()
-                };
-                vectors_to_index.push((id, vector.clone()));
+                // 文档ID已经验证过非空，直接使用
+                vectors_to_index.push((document.id.clone(), vector.clone()));
             }
         }
 
@@ -419,7 +418,7 @@ impl VectorDatabase {
     ) -> Result<Vec<Document>, VectorDbError> {
         let storage = self.storage.read().await;
         let ids = storage.list_document_ids(offset, limit).await?;
-        
+
         // 预分配容量以减少重新分配
         let mut documents = Vec::with_capacity(ids.len());
 
@@ -459,18 +458,21 @@ impl VectorDatabase {
     }
 
     /// 搜索文档（gRPC服务专用）
-    pub async fn search_documents(&self, request: SearchRequest) -> Result<GrpcSearchResponse, VectorDbError> {
+    pub async fn search_documents(
+        &self,
+        request: SearchRequest,
+    ) -> Result<GrpcSearchResponse, VectorDbError> {
         use std::time::Instant;
-        
+
         let start_time = Instant::now();
-        
+
         // 执行向量搜索
         let storage = self.storage.read().await;
         let vector_index = self.vector_index.read().await;
-        
+
         // 如果有向量，执行向量搜索
         let mut results = Vec::new();
-        
+
         if !request.vector.is_empty() {
             // 使用向量索引搜索
             match vector_index.search(&request.vector, request.limit) {
@@ -496,7 +498,12 @@ impl VectorDatabase {
                             results.push(InternalSearchResult {
                                 document_id: search_result.document.id.clone(),
                                 title: Some(search_result.document.title.clone()),
-                                content_snippet: search_result.document.content.chars().take(200).collect(),
+                                content_snippet: search_result
+                                    .document
+                                    .content
+                                    .chars()
+                                    .take(200)
+                                    .collect(),
                                 similarity_score: search_result.score,
                                 package_name: Some(search_result.document.package_name.clone()),
                                 doc_type: Some(search_result.document.doc_type.clone()),
@@ -522,10 +529,10 @@ impl VectorDatabase {
                 }
             }
         }
-        
+
         let query_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
         let total_matches = results.len();
-        
+
         Ok(GrpcSearchResponse {
             results,
             query_time_ms,
@@ -654,7 +661,10 @@ impl VectorDatabase {
             storage_status: HealthStatus::Healthy,
             index_status: HealthStatus::Healthy,
             auth_status: self.auth_manager.as_ref().map(|_| HealthStatus::Healthy),
-            resilience_status: self.resilience_manager.as_ref().map(|rm| rm.get_resilience_status()),
+            resilience_status: self
+                .resilience_manager
+                .as_ref()
+                .map(|rm| rm.get_resilience_status()),
             performance_metrics: Some(self.get_performance_metrics()),
             error_details: Vec::new(),
         }
@@ -663,7 +673,7 @@ impl VectorDatabase {
     /// 获取企业级指标
     pub async fn get_enterprise_metrics(&self) -> EnterpriseMetrics {
         let stats = self.get_stats().await;
-        
+
         EnterpriseMetrics {
             timestamp: std::time::SystemTime::now(),
             database_metrics: DatabaseMetrics {
@@ -683,7 +693,10 @@ impl VectorDatabase {
                 active_sessions: 0,
                 failed_auth_attempts: 0,
             }),
-            resilience_metrics: self.resilience_manager.as_ref().map(|rm| rm.get_resilience_status()),
+            resilience_metrics: self
+                .resilience_manager
+                .as_ref()
+                .map(|rm| rm.get_resilience_status()),
         }
     }
 
@@ -706,20 +719,32 @@ impl VectorDatabase {
     pub async fn add_document_enterprise(
         &self,
         document: Document,
-        user_id: Option<String>,
+        api_key_or_user_id: Option<String>,
     ) -> Result<String, VectorDbError> {
-        // 如果有用户ID，进行权限检查
-        if let (Some(user_id), Some(auth_manager)) = (&user_id, &self.auth_manager) {
-            auth_manager.check_permission(user_id, &Permission::WriteData)
+        // 如果有API密钥或用户ID，进行权限检查
+        if let (Some(key_or_id), Some(auth_manager)) = (&api_key_or_user_id, &self.auth_manager) {
+            let user_id = if key_or_id.starts_with("gvdb_") {
+                // 这是一个API密钥，需要验证并获取用户ID
+                let user = auth_manager
+                    .authenticate_api_key(key_or_id)
+                    .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
+                user.id
+            } else {
+                // 这是一个用户ID
+                key_or_id.clone()
+            };
+
+            auth_manager
+                .check_permission(&user_id, &Permission::WriteData)
                 .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
         }
 
         // 使用韧性管理器执行操作
         if let Some(resilience_manager) = &self.resilience_manager {
-            resilience_manager.execute_with_resilience(
-                "document_insert",
-                || self.add_document(document.clone()),
-            ).await.map_err(|e| VectorDbError::other(e.to_string()))
+            resilience_manager
+                .execute_with_resilience("document_insert", || self.add_document(document.clone()))
+                .await
+                .map_err(|e| VectorDbError::other(e.to_string()))
         } else {
             self.add_document(document).await
         }
@@ -730,21 +755,33 @@ impl VectorDatabase {
         &self,
         query: &str,
         limit: usize,
-        user_id: Option<String>,
+        api_key_or_user_id: Option<String>,
     ) -> Result<Vec<SearchResult>, VectorDbError> {
-        // 如果有用户ID，进行权限检查
-        if let (Some(user_id), Some(auth_manager)) = (&user_id, &self.auth_manager) {
-            auth_manager.check_permission(user_id, &Permission::ReadData)
+        // 如果有API密钥或用户ID，进行权限检查
+        if let (Some(key_or_id), Some(auth_manager)) = (&api_key_or_user_id, &self.auth_manager) {
+            let user_id = if key_or_id.starts_with("gvdb_") {
+                // 这是一个API密钥，需要验证并获取用户ID
+                let user = auth_manager
+                    .authenticate_api_key(key_or_id)
+                    .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
+                user.id
+            } else {
+                // 这是一个用户ID
+                key_or_id.clone()
+            };
+
+            auth_manager
+                .check_permission(&user_id, &Permission::ReadData)
                 .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
         }
 
         // 使用韧性管理器执行操作
         if let Some(resilience_manager) = &self.resilience_manager {
             let query_str = query.to_string();
-            resilience_manager.execute_with_resilience(
-                "vector_search",
-                || self.text_search(&query_str, limit),
-            ).await.map_err(|e| VectorDbError::other(e.to_string()))
+            resilience_manager
+                .execute_with_resilience("vector_search", || self.text_search(&query_str, limit))
+                .await
+                .map_err(|e| VectorDbError::other(e.to_string()))
         } else {
             self.text_search(query, limit).await
         }

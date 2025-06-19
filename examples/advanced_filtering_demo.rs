@@ -409,13 +409,10 @@ fn benchmark_filter_performance(engine: &FilterEngine) -> Result<()> {
 
         for _ in 0..iterations {
             let start = Instant::now();
-            match engine.execute_filter(&filter) {
-                Ok(results) => {
-                    total_time += start.elapsed().as_secs_f64() * 1000.0;
-                    total_results += results.len();
-                    success_count += 1;
-                }
-                Err(_) => {}
+            if let Ok(results) = engine.execute_filter(&filter) {
+                total_time += start.elapsed().as_secs_f64() * 1000.0;
+                total_results += results.len();
+                success_count += 1;
             }
         }
 
