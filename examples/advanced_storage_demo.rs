@@ -2,7 +2,7 @@
 // Week 9-10: Storage Engine Upgrade
 
 use grape_vector_db::{
-    advanced_storage::{AdvancedStorage, AdvancedStorageConfig, ColumnFamilies, StorageStats},
+    advanced_storage::{AdvancedStorage, AdvancedStorageConfig},
     errors::Result,
     types::Point,
 };
@@ -175,8 +175,7 @@ async fn demo_transaction_support(storage: &AdvancedStorage) -> Result<()> {
     let batch_duration = batch_start.elapsed();
     println!(
         "   ✅ Batch stored {} vectors in {:?}",
-        batch_len,
-        batch_duration
+        batch_len, batch_duration
     );
 
     // Verify all vectors were stored atomically
@@ -382,10 +381,7 @@ async fn demo_multi_tree_usage(storage: &AdvancedStorage) -> Result<()> {
     }
 
     storage.batch_store_vectors(demo_vectors).await?;
-    println!(
-        "   ✅ Stored {} vectors across multiple trees",
-        10
-    );
+    println!("   ✅ Stored {} vectors across multiple trees", 10);
 
     // Verify data separation by checking that we can retrieve vectors
     // (this demonstrates that the multi-tree architecture works correctly)

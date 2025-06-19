@@ -1,13 +1,13 @@
 // 性能指标模块
 
+use atomic_float::AtomicF64;
+use metrics;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
-use metrics;
-use std::collections::VecDeque;
-use atomic_float::AtomicF64;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 性能指标
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,9 +78,7 @@ impl QueryTimeStats {
         }
 
         let mut sorted: Vec<f64> = self.times.iter().cloned().collect();
-        sorted.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let index = ((sorted.len() as f64 - 1.0) * p / 100.0).round() as usize;
         sorted[index.min(sorted.len() - 1)]
@@ -116,7 +114,7 @@ impl CacheStats {
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
-        
+
         if total == 0 {
             0.0
         } else {
@@ -142,7 +140,7 @@ impl QpsCalculator {
     fn record_query(&mut self) {
         let now = Instant::now();
         self.query_times.push_back(now);
-        
+
         // 清理过期的查询记录
         let cutoff = now - self.window_duration;
         while let Some(&front_time) = self.query_times.front() {
@@ -202,7 +200,7 @@ impl MetricsCollector {
         // 更新metrics
         metrics::histogram!("query_duration_ms").record(time_ms);
         metrics::counter!("queries_total").increment(1);
-        
+
         // 更新QPS gauge
         let qps = self.qps_calculator.read().current_qps();
         metrics::gauge!("queries_per_second").set(qps);
@@ -253,26 +251,33 @@ impl MetricsCollector {
     /// 记录索引保存事件
     pub async fn record_index_save(&self, file_size: usize, path: &std::path::Path) {
         let size_mb = file_size as f64 / (1024.0 * 1024.0);
-        
+
         // 记录保存指标
         metrics::counter!("index_saves_total").increment(1);
         metrics::histogram!("index_save_size_mb").record(size_mb);
-        
+
         tracing::info!("索引保存完成: 路径={:?}, 大小={:.2}MB", path, size_mb);
     }
 
     /// 记录索引加载事件
-    pub async fn record_index_load(&self, file_size: usize, vector_count: usize, path: &std::path::Path) {
+    pub async fn record_index_load(
+        &self,
+        file_size: usize,
+        vector_count: usize,
+        path: &std::path::Path,
+    ) {
         let size_mb = file_size as f64 / (1024.0 * 1024.0);
-        
+
         // 记录加载指标
         metrics::counter!("index_loads_total").increment(1);
         metrics::histogram!("index_load_size_mb").record(size_mb);
         metrics::histogram!("index_load_vector_count").record(vector_count as f64);
-        
+
         tracing::info!(
-            "索引加载完成: 路径={:?}, 大小={:.2}MB, 向量数量={}", 
-            path, size_mb, vector_count
+            "索引加载完成: 路径={:?}, 大小={:.2}MB, 向量数量={}",
+            path,
+            size_mb,
+            vector_count
         );
     }
 
@@ -281,7 +286,7 @@ impl MetricsCollector {
         let query_times = self.query_times.read();
         let total_queries = self.total_queries.load(Ordering::Relaxed);
         let total_errors = self.total_errors.load(Ordering::Relaxed);
-        
+
         let error_rate = if total_queries > 0 {
             total_errors as f64 / total_queries as f64
         } else {
@@ -312,11 +317,11 @@ impl MetricsCollector {
         self.index_build_time.store(0.0, Ordering::Relaxed);
         self.memory_usage.store(0.0, Ordering::Relaxed);
         self.disk_usage.store(0.0, Ordering::Relaxed);
-        
+
         // 重置缓存统计
         self.cache_stats.hits.store(0, Ordering::Relaxed);
         self.cache_stats.misses.store(0, Ordering::Relaxed);
-        
+
         // 重置QPS计算器
         self.qps_calculator.write().query_times.clear();
     }
@@ -324,10 +329,13 @@ impl MetricsCollector {
     /// 导出最终统计信息
     pub fn export_final_stats(&self) -> Result<(), Box<dyn std::error::Error>> {
         let metrics = self.get_metrics();
-        
+
         tracing::info!("Final metrics:");
         tracing::info!("  Total queries: {}", metrics.total_queries);
-        tracing::info!("  Average query time: {:.2}ms", metrics.average_query_time_ms);
+        tracing::info!(
+            "  Average query time: {:.2}ms",
+            metrics.average_query_time_ms
+        );
         tracing::info!("  P95 query time: {:.2}ms", metrics.p95_query_time_ms);
         tracing::info!("  P99 query time: {:.2}ms", metrics.p99_query_time_ms);
         tracing::info!("  Cache hit rate: {:.2}%", metrics.cache_hit_rate * 100.0);
@@ -336,7 +344,7 @@ impl MetricsCollector {
         tracing::info!("  Memory usage: {:.2}MB", metrics.memory_usage_mb);
         tracing::info!("  Disk usage: {:.2}MB", metrics.disk_usage_mb);
         tracing::info!("  Error rate: {:.2}%", metrics.error_rate * 100.0);
-        
+
         Ok(())
     }
 
@@ -344,41 +352,34 @@ impl MetricsCollector {
     #[cfg(feature = "prometheus-metrics")]
     pub fn export_prometheus(&self) -> String {
         use metrics_exporter_prometheus::PrometheusBuilder;
-        
+
         // 获取当前指标
         let current_metrics = self.get_metrics();
-        
+
         // 使用企业级标签和命名空间
         let builder = PrometheusBuilder::new()
             .set_buckets(&[
-                0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0
+                0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
             ])
             .expect("设置Prometheus桶失败");
-            
+
         builder.install().expect("安装Prometheus导出器失败");
-        
+
         // 注册核心企业级指标
         metrics::gauge!("grape_vector_db_queries_per_second")
             .set(current_metrics.queries_per_second);
         metrics::gauge!("grape_vector_db_avg_query_time_ms")
             .set(current_metrics.average_query_time_ms);
-        metrics::gauge!("grape_vector_db_p95_query_time_ms")
-            .set(current_metrics.p95_query_time_ms);
-        metrics::gauge!("grape_vector_db_p99_query_time_ms")
-            .set(current_metrics.p99_query_time_ms);
-        metrics::gauge!("grape_vector_db_cache_hit_rate")
-            .set(current_metrics.cache_hit_rate);
-        metrics::counter!("grape_vector_db_total_queries")
-            .absolute(current_metrics.total_queries);
+        metrics::gauge!("grape_vector_db_p95_query_time_ms").set(current_metrics.p95_query_time_ms);
+        metrics::gauge!("grape_vector_db_p99_query_time_ms").set(current_metrics.p99_query_time_ms);
+        metrics::gauge!("grape_vector_db_cache_hit_rate").set(current_metrics.cache_hit_rate);
+        metrics::counter!("grape_vector_db_total_queries").absolute(current_metrics.total_queries);
         metrics::counter!("grape_vector_db_total_documents")
             .absolute(current_metrics.total_documents);
-        metrics::gauge!("grape_vector_db_memory_usage_mb")
-            .set(current_metrics.memory_usage_mb);
-        metrics::gauge!("grape_vector_db_disk_usage_mb")
-            .set(current_metrics.disk_usage_mb);
-        metrics::gauge!("grape_vector_db_error_rate")
-            .set(current_metrics.error_rate);
-        
+        metrics::gauge!("grape_vector_db_memory_usage_mb").set(current_metrics.memory_usage_mb);
+        metrics::gauge!("grape_vector_db_disk_usage_mb").set(current_metrics.disk_usage_mb);
+        metrics::gauge!("grape_vector_db_error_rate").set(current_metrics.error_rate);
+
         // Return a formatted prometheus metrics string since handle.render() doesn't exist
         format!(
             "# HELP grape_vector_db_queries_per_second Current queries per second\n\
@@ -424,28 +425,28 @@ impl PerformanceMonitor {
     /// 启动后台监控任务
     pub fn start_monitoring(&mut self, interval: Duration) {
         let collector = self.collector.clone();
-        
+
         let handle = tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(interval);
-            
+
             loop {
                 interval_timer.tick().await;
-                
+
                 // 这里可以添加系统级别的指标收集
                 // 例如：CPU使用率、内存使用率等
-                
+
                 // 更新内存使用量（示例）
                 if let Ok(memory_info) = get_memory_usage().await {
                     collector.update_memory_usage(memory_info);
                 }
-                
+
                 // 更新磁盘使用量（示例）
                 if let Ok(disk_info) = get_disk_usage().await {
                     collector.update_disk_usage(disk_info);
                 }
             }
         });
-        
+
         self._handle = Some(handle);
     }
 }
@@ -494,19 +495,19 @@ mod tests {
     #[test]
     fn test_metrics_collector() {
         let collector = MetricsCollector::new();
-        
+
         // 记录一些查询时间
         collector.record_query_time(10.0);
         collector.record_query_time(20.0);
         collector.record_query_time(30.0);
-        
+
         // 记录缓存统计
         collector.record_cache_hit();
         collector.record_cache_hit();
         collector.record_cache_miss();
-        
+
         let metrics = collector.get_metrics();
-        
+
         assert_eq!(metrics.total_queries, 3);
         assert_eq!(metrics.average_query_time_ms, 20.0);
         assert!((metrics.cache_hit_rate - 0.6666666666666666).abs() < 0.001);
@@ -515,13 +516,13 @@ mod tests {
     #[test]
     fn test_qps_calculation() {
         let collector = MetricsCollector::new();
-        
+
         // 记录一些查询
         for _ in 0..10 {
             collector.record_query_time(1.0);
             thread::sleep(Duration::from_millis(10));
         }
-        
+
         let metrics = collector.get_metrics();
         assert!(metrics.queries_per_second > 0.0);
     }
@@ -529,21 +530,21 @@ mod tests {
     #[test]
     fn test_percentiles() {
         let mut stats = QueryTimeStats::new(1000);
-        
+
         // 添加一些测试数据
         for i in 1..=100 {
             stats.add_time(i as f64);
         }
-        
+
         println!("Average: {}", stats.average());
         println!("50th percentile: {}", stats.percentile(50.0));
         println!("95th percentile: {}", stats.percentile(95.0));
         println!("99th percentile: {}", stats.percentile(99.0));
-        
+
         assert!((stats.average() - 50.5).abs() < 0.1);
         // More lenient assertions for percentiles
         assert!(stats.percentile(50.0) >= 40.0 && stats.percentile(50.0) <= 60.0);
         assert!(stats.percentile(95.0) >= 85.0 && stats.percentile(95.0) <= 100.0);
         assert!(stats.percentile(99.0) >= 90.0 && stats.percentile(99.0) <= 100.0);
     }
-} 
+}

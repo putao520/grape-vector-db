@@ -786,8 +786,6 @@ pub struct ClusterInfo {
     pub version: u64,
 }
 
-
-
 /// 分片映射
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShardMap {
@@ -796,8 +794,6 @@ pub struct ShardMap {
     /// 映射版本
     pub version: u64,
 }
-
-
 
 /// 心跳消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -850,7 +846,7 @@ pub enum QueryResponse {
 pub enum VectorDbError {
     #[error("存储错误: {0}")]
     StorageError(String),
-    
+
     #[error("存储错误: {0}")]
     Storage(String), // Alternative name for compatibility
 

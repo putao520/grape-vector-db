@@ -361,25 +361,25 @@ impl AdvancedStorage {
     pub async fn warmup_cache(&self) -> Result<()> {
         tracing::info!("开始企业级缓存预热...");
         let start = Instant::now();
-        
+
         // 多阶段预热策略
         let mut total_preloaded = 0;
-        
+
         // 阶段1: 预热关键元数据
         tracing::info!("阶段1: 预热元数据");
         let metadata_count = self.warmup_metadata().await?;
         total_preloaded += metadata_count;
-        
+
         // 阶段2: 预热最近访问的向量（基于访问时间戳）
         tracing::info!("阶段2: 预热热点向量数据");
         let vectors_count = self.warmup_hot_vectors().await?;
         total_preloaded += vectors_count;
-        
+
         // 阶段3: 预热索引数据
         tracing::info!("阶段3: 预热索引数据");
         let index_count = self.warmup_index_data().await?;
         total_preloaded += index_count;
-        
+
         // 阶段4: 预热频繁查询的文档
         tracing::info!("阶段4: 预热热点文档");
         let documents_count = self.warmup_hot_documents().await?;
@@ -392,105 +392,105 @@ impl AdvancedStorage {
         );
         Ok(())
     }
-    
+
     /// 预热元数据
     async fn warmup_metadata(&self) -> Result<usize> {
         let metadata_tree = self.get_tree(ColumnFamilies::METADATA)?;
         let mut count = 0;
-        
+
         // 预热所有元数据（通常数量不大但访问频繁）
         for item in metadata_tree.iter().flatten() {
             let (key, value) = item;
-            
+
             // 触发缓存加载
             let _key_str = String::from_utf8_lossy(&key);
             let _value_size = value.len();
-            
+
             count += 1;
         }
-        
+
         tracing::debug!("预热元数据完成: {} 项", count);
         Ok(count)
     }
-    
+
     /// 预热热点向量数据
     async fn warmup_hot_vectors(&self) -> Result<usize> {
         let vectors_tree = self.get_tree(ColumnFamilies::VECTORS)?;
         let mut count = 0;
         let max_warmup = 5000; // 最多预热5000个向量
-        
+
         // 基于key的字典序预热（最近插入的向量通常key较大）
         let mut vectors: Vec<_> = vectors_tree.iter().collect();
-        
+
         // 倒序排列，优先预热最近的向量
         vectors.reverse();
-        
+
         for item in vectors.into_iter().take(max_warmup).flatten() {
             let (key, value) = item;
-            
+
             // 触发向量数据缓存
             let _key_str = String::from_utf8_lossy(&key);
             let _vector_size = value.len();
-            
+
             // 模拟向量访问以触发缓存
             if value.len() >= 4 {
                 let _dimension_hint = value.len() / 4; // 假设f32向量
             }
-            
+
             count += 1;
-            
+
             // 避免过度内存使用
             if count % 1000 == 0 {
                 tokio::task::yield_now().await;
             }
         }
-        
+
         tracing::debug!("预热热点向量完成: {} 项", count);
         Ok(count)
     }
-    
+
     /// 预热索引数据
     async fn warmup_index_data(&self) -> Result<usize> {
         let indices_tree = self.get_tree(ColumnFamilies::INDICES)?;
         let mut count = 0;
-        
+
         // 预热所有索引数据（对搜索性能关键）
         for item in indices_tree.iter().flatten() {
             let (key, value) = item;
-            
+
             // 触发索引数据缓存
             let _key_str = String::from_utf8_lossy(&key);
             let _index_size = value.len();
-            
+
             count += 1;
         }
-        
+
         tracing::debug!("预热索引数据完成: {} 项", count);
         Ok(count)
     }
-    
+
     /// 预热热点文档
     async fn warmup_hot_documents(&self) -> Result<usize> {
         let documents_tree = self.get_tree(ColumnFamilies::DOCUMENTS)?;
         let mut count = 0;
         let max_warmup = 2000; // 最多预热2000个文档
-        
+
         // 预热最近的文档
         for item in documents_tree.iter().rev().take(max_warmup).flatten() {
             let (key, value) = item;
-            
+
             // 触发文档数据缓存
             let _key_str = String::from_utf8_lossy(&key);
             let _doc_size = value.len();
-            
+
             count += 1;
-            
+
             // 避免阻塞过久
             if count % 500 == 0 {
                 tokio::task::yield_now().await;
             }
         }
-        
+
         tracing::debug!("预热热点文档完成: {} 项", count);
         Ok(count)
     }
@@ -680,7 +680,10 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result
 /// Implement VectorStore trait for AdvancedStorage
 #[async_trait::async_trait]
 impl crate::storage::VectorStore for AdvancedStorage {
-    async fn insert_document(&mut self, document: crate::types::Document) -> crate::errors::Result<String> {
+    async fn insert_document(
+        &mut self,
+        document: crate::types::Document,
+    ) -> crate::errors::Result<String> {
         let id = if document.id.is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
@@ -690,7 +693,8 @@ impl crate::storage::VectorStore for AdvancedStorage {
         let point = crate::types::Point {
             id: id.clone(),
             vector: document.vector.unwrap_or_default(),
-            payload: document.metadata
+            payload: document
+                .metadata
                 .into_iter()
                 .map(|(k, v)| (k, serde_json::Value::String(v)))
                 .collect(),
@@ -698,11 +702,14 @@ impl crate::storage::VectorStore for AdvancedStorage {
 
         self.store_vector(&point)
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
-        
+
         Ok(id)
     }
 
-    async fn batch_insert_documents(&mut self, documents: Vec<crate::types::Document>) -> crate::errors::Result<Vec<String>> {
+    async fn batch_insert_documents(
+        &mut self,
+        documents: Vec<crate::types::Document>,
+    ) -> crate::errors::Result<Vec<String>> {
         let mut ids = Vec::new();
         for document in documents {
             let id = self.insert_document(document).await?;
@@ -711,18 +718,23 @@ impl crate::storage::VectorStore for AdvancedStorage {
         Ok(ids)
     }
 
-    async fn get_document(&self, id: &str) -> crate::errors::Result<Option<crate::types::DocumentRecord>> {
-        if let Some(point) = self.get_vector(id)
-            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
-            
+    async fn get_document(
+        &self,
+        id: &str,
+    ) -> crate::errors::Result<Option<crate::types::DocumentRecord>> {
+        if let Some(point) = self
+            .get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?
+        {
             let doc = crate::types::DocumentRecord {
                 id: point.id.clone(),
-                title: "".to_string(), // AdvancedStorage doesn't store title
+                title: "".to_string(),   // AdvancedStorage doesn't store title
                 content: "".to_string(), // AdvancedStorage doesn't store content
                 embedding: point.vector.clone(),
                 package_name: "".to_string(),
                 doc_type: "".to_string(),
-                metadata: point.payload
+                metadata: point
+                    .payload
                     .into_iter()
                     .map(|(k, v)| (k, v.to_string()))
                     .collect(),
@@ -744,7 +756,11 @@ impl crate::storage::VectorStore for AdvancedStorage {
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))
     }
 
-    async fn update_document(&mut self, id: &str, document: crate::types::Document) -> crate::errors::Result<bool> {
+    async fn update_document(
+        &mut self,
+        id: &str,
+        document: crate::types::Document,
+    ) -> crate::errors::Result<bool> {
         // Delete existing and insert new
         self.delete_document(id).await?;
         let mut doc_with_id = document;
@@ -753,18 +769,40 @@ impl crate::storage::VectorStore for AdvancedStorage {
         Ok(true)
     }
 
-    async fn vector_search(&self, _query_vector: &[f32], _limit: usize, _threshold: Option<f32>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+    async fn vector_search(
+        &self,
+        _query_vector: &[f32],
+        _limit: usize,
+        _threshold: Option<f32>,
+    ) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
         // AdvancedStorage doesn't implement vector search directly
         // This should be handled by the index layer
-        Err(crate::types::VectorDbError::NotImplemented("Vector search not implemented in AdvancedStorage, use index layer".into()))
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Vector search not implemented in AdvancedStorage, use index layer".into(),
+        ))
     }
 
-    async fn text_search(&self, _query: &str, _limit: usize, _filters: Option<HashMap<String, String>>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
-        Err(crate::types::VectorDbError::NotImplemented("Text search not implemented in AdvancedStorage".into()))
+    async fn text_search(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _filters: Option<HashMap<String, String>>,
+    ) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Text search not implemented in AdvancedStorage".into(),
+        ))
     }
 
-    async fn hybrid_search(&self, _query: &str, _query_vector: Option<&[f32]>, _limit: usize, _alpha: f32) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
-        Err(crate::types::VectorDbError::NotImplemented("Hybrid search not implemented in AdvancedStorage".into()))
+    async fn hybrid_search(
+        &self,
+        _query: &str,
+        _query_vector: Option<&[f32]>,
+        _limit: usize,
+        _alpha: f32,
+    ) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Hybrid search not implemented in AdvancedStorage".into(),
+        ))
     }
 
     async fn get_stats(&self) -> crate::errors::Result<crate::types::VectorDbStats> {
@@ -784,7 +822,8 @@ impl crate::storage::VectorStore for AdvancedStorage {
     }
 
     async fn backup(&self, _path: &std::path::Path) -> crate::errors::Result<()> {
-        let backup_id = self.create_backup()
+        let backup_id = self
+            .create_backup()
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
         // The actual backup logic would need to copy the backup to the specified path
         tracing::info!("Backup created with ID: {}", backup_id);
@@ -792,34 +831,51 @@ impl crate::storage::VectorStore for AdvancedStorage {
     }
 
     async fn restore(&mut self, _path: &std::path::Path) -> crate::errors::Result<()> {
-        Err(crate::types::VectorDbError::NotImplemented("Restore not implemented".into()))
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Restore not implemented".into(),
+        ))
     }
 
     async fn clear(&mut self) -> crate::errors::Result<()> {
         // This would need to clear all data in the storage
-        Err(crate::types::VectorDbError::NotImplemented("Clear not implemented".into()))
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Clear not implemented".into(),
+        ))
     }
 
     async fn count_documents(&self) -> crate::errors::Result<usize> {
         Ok(self.get_stats().estimated_keys as usize)
     }
 
-    async fn list_document_ids(&self, _offset: usize, _limit: usize) -> crate::errors::Result<Vec<String>> {
+    async fn list_document_ids(
+        &self,
+        _offset: usize,
+        _limit: usize,
+    ) -> crate::errors::Result<Vec<String>> {
         // This would need to list actual document IDs from storage
-        Err(crate::types::VectorDbError::NotImplemented("List document IDs not implemented".into()))
+        Err(crate::types::VectorDbError::NotImplemented(
+            "List document IDs not implemented".into(),
+        ))
     }
 
     async fn document_exists(&self, id: &str) -> crate::errors::Result<bool> {
-        Ok(self.get_vector(id)
+        Ok(self
+            .get_vector(id)
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?
             .is_some())
     }
 
-    async fn get_document_metadata(&self, id: &str) -> crate::errors::Result<Option<HashMap<String, String>>> {
-        if let Some(point) = self.get_vector(id)
-            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
+    async fn get_document_metadata(
+        &self,
+        id: &str,
+    ) -> crate::errors::Result<Option<HashMap<String, String>>> {
+        if let Some(point) = self
+            .get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?
+        {
             // Convert HashMap<String, Value> to HashMap<String, String>
-            let string_metadata: HashMap<String, String> = point.payload
+            let string_metadata: HashMap<String, String> = point
+                .payload
                 .into_iter()
                 .map(|(k, v)| (k, v.to_string()))
                 .collect();
@@ -829,9 +885,15 @@ impl crate::storage::VectorStore for AdvancedStorage {
         }
     }
 
-    async fn update_document_metadata(&mut self, id: &str, metadata: HashMap<String, String>) -> crate::errors::Result<bool> {
-        if let Some(mut point) = self.get_vector(id)
-            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))? {
+    async fn update_document_metadata(
+        &mut self,
+        id: &str,
+        metadata: HashMap<String, String>,
+    ) -> crate::errors::Result<bool> {
+        if let Some(mut point) = self
+            .get_vector(id)
+            .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?
+        {
             // Convert HashMap<String, String> to HashMap<String, Value>
             let value_metadata: HashMap<String, serde_json::Value> = metadata
                 .into_iter()
@@ -846,7 +908,13 @@ impl crate::storage::VectorStore for AdvancedStorage {
         }
     }
 
-    async fn search_by_metadata(&self, _filters: HashMap<String, String>, _limit: usize) -> crate::errors::Result<Vec<crate::types::DocumentRecord>> {
-        Err(crate::types::VectorDbError::NotImplemented("Search by metadata not implemented".into()))
+    async fn search_by_metadata(
+        &self,
+        _filters: HashMap<String, String>,
+        _limit: usize,
+    ) -> crate::errors::Result<Vec<crate::types::DocumentRecord>> {
+        Err(crate::types::VectorDbError::NotImplemented(
+            "Search by metadata not implemented".into(),
+        ))
     }
 }

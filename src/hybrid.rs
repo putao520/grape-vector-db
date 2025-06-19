@@ -1,5 +1,5 @@
 //! 混合搜索引擎实现
-//! 
+//!
 //! 本模块提供：
 //! - 混合搜索引擎（密集向量 + 稀疏向量 + 文本搜索）
 //! - RRF (Reciprocal Rank Fusion) 算法
@@ -7,19 +7,18 @@
 //! - 高级混合搜索功能
 
 use crate::{
-    types::{
-        HybridSearchRequest, FusionStrategy, SearchResult, 
-        ScoreBreakdown, DocumentRecord, FusionWeights, FusionPerformanceStats,
-        QueryMetrics
-    },
-    sparse::{SparseIndex, SimpleTokenizer},
-    index::{HnswVectorIndex, VectorIndex},
-    storage::VectorStore,
     errors::Result,
+    index::{HnswVectorIndex, VectorIndex},
+    sparse::{SimpleTokenizer, SparseIndex},
+    storage::VectorStore,
+    types::{
+        DocumentRecord, FusionPerformanceStats, FusionStrategy, FusionWeights, HybridSearchRequest,
+        QueryMetrics, ScoreBreakdown, SearchResult,
+    },
 };
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 /// 学习式融合模型
 pub trait FusionModel: Send + Sync {
@@ -44,9 +43,9 @@ pub struct FusionContext {
 
 #[derive(Debug, Clone)]
 pub enum QueryType {
-    Semantic,    // 语义查询（适合密集向量）
-    Keyword,     // 关键词查询（适合稀疏向量）
-    Mixed,       // 混合查询
+    Semantic, // 语义查询（适合密集向量）
+    Keyword,  // 关键词查询（适合稀疏向量）
+    Mixed,    // 混合查询
 }
 
 #[derive(Debug, Clone)]
@@ -70,18 +69,33 @@ pub struct StatisticalFusionModel {
 impl StatisticalFusionModel {
     pub fn new(learning_rate: f32) -> Self {
         let mut query_type_weights = HashMap::new();
-        
+
         // 为不同查询类型设置初始权重
-        query_type_weights.insert("semantic".to_string(), FusionWeights {
-            dense_weight: 0.8, sparse_weight: 0.15, text_weight: 0.05
-        });
-        query_type_weights.insert("keyword".to_string(), FusionWeights {
-            dense_weight: 0.3, sparse_weight: 0.6, text_weight: 0.1
-        });
-        query_type_weights.insert("mixed".to_string(), FusionWeights {
-            dense_weight: 0.5, sparse_weight: 0.4, text_weight: 0.1
-        });
-        
+        query_type_weights.insert(
+            "semantic".to_string(),
+            FusionWeights {
+                dense_weight: 0.8,
+                sparse_weight: 0.15,
+                text_weight: 0.05,
+            },
+        );
+        query_type_weights.insert(
+            "keyword".to_string(),
+            FusionWeights {
+                dense_weight: 0.3,
+                sparse_weight: 0.6,
+                text_weight: 0.1,
+            },
+        );
+        query_type_weights.insert(
+            "mixed".to_string(),
+            FusionWeights {
+                dense_weight: 0.5,
+                sparse_weight: 0.4,
+                text_weight: 0.1,
+            },
+        );
+
         Self {
             query_type_weights,
             weight_history: Vec::new(),
@@ -94,58 +108,60 @@ impl FusionModel for StatisticalFusionModel {
     fn predict_weights(&self, _query: &str, context: &FusionContext) -> FusionWeights {
         let query_type_key = match context.query_type {
             QueryType::Semantic => "semantic",
-            QueryType::Keyword => "keyword", 
+            QueryType::Keyword => "keyword",
             QueryType::Mixed => "mixed",
         };
-        
-        let base_weights = self.query_type_weights
+
+        let base_weights = self
+            .query_type_weights
             .get(query_type_key)
             .cloned()
             .unwrap_or_default();
-        
+
         // 根据查询长度调整权重
         let length_factor = if context.query_length > 10 {
-            1.2  // 长查询更适合语义搜索
+            1.2 // 长查询更适合语义搜索
         } else {
-            0.8  // 短查询更适合关键词搜索
+            0.8 // 短查询更适合关键词搜索
         };
-        
+
         FusionWeights {
             dense_weight: (base_weights.dense_weight * length_factor).min(1.0),
             sparse_weight: base_weights.sparse_weight,
             text_weight: base_weights.text_weight,
         }
     }
-    
+
     fn update_model(&mut self, feedback: &QueryMetrics) -> Result<()> {
         if let Some(satisfaction) = feedback.user_satisfaction {
             let satisfaction_score = satisfaction as f64 / 5.0; // 标准化到0-1
-            
+
             // 简单的梯度下降更新
             if let Some(last_weights) = self.weight_history.last() {
                 let weight_diff = satisfaction_score - last_weights.1;
-                
+
                 // 更新对应查询类型的权重
                 for (_, weights) in self.query_type_weights.iter_mut() {
                     weights.dense_weight += self.learning_rate * weight_diff as f32;
                     weights.sparse_weight += self.learning_rate * weight_diff as f32 * 0.5;
                     weights.text_weight += self.learning_rate * weight_diff as f32 * 0.3;
-                    
+
                     // 确保权重在合理范围内
                     weights.dense_weight = weights.dense_weight.clamp(0.1, 0.9);
                     weights.sparse_weight = weights.sparse_weight.clamp(0.1, 0.9);
                     weights.text_weight = weights.text_weight.clamp(0.05, 0.3);
                 }
             }
-            
-            self.weight_history.push((FusionWeights::default(), satisfaction_score));
-            
+
+            self.weight_history
+                .push((FusionWeights::default(), satisfaction_score));
+
             // 限制历史记录大小
             if self.weight_history.len() > 1000 {
                 self.weight_history.remove(0);
             }
         }
-        
+
         Ok(())
     }
 }
@@ -210,12 +226,14 @@ impl HybridSearchEngine {
 
     /// 添加文档到混合索引
     pub async fn add_document<S: VectorStore + ?Sized>(
-        &self, 
-        _store: &S, 
-        record: &DocumentRecord
+        &self,
+        _store: &S,
+        record: &DocumentRecord,
     ) -> Result<()> {
         // 添加到密集向量索引
-        self.dense_engine.lock().add_vector(record.id.clone(), record.embedding.clone())?;
+        self.dense_engine
+            .lock()
+            .add_vector(record.id.clone(), record.embedding.clone())?;
 
         // 如果有稀疏向量表示，添加到稀疏索引
         if let Some(sparse_repr) = &record.sparse_representation {
@@ -230,16 +248,20 @@ impl HybridSearchEngine {
     }
 
     /// 计算文档的稀疏向量表示
-    fn compute_sparse_representation(&self, document_id: &str, content: &str) -> Result<crate::types::DocumentSparseRepresentation> {
+    fn compute_sparse_representation(
+        &self,
+        document_id: &str,
+        content: &str,
+    ) -> Result<crate::types::DocumentSparseRepresentation> {
         let vocabulary = self.vocabulary.read();
-        
+
         // 如果词汇表为空，创建空的稀疏向量表示
         if vocabulary.is_empty() {
             drop(vocabulary);
             let empty_sparse_vector = crate::types::SparseVector::new(
                 vec![], // 空索引
                 vec![], // 空值
-                0       // 空维度
+                0,      // 空维度
             )?;
             return Ok(crate::types::DocumentSparseRepresentation {
                 document_id: document_id.to_string(),
@@ -249,7 +271,8 @@ impl HybridSearchEngine {
             });
         }
 
-        self.tokenizer.document_to_sparse_vector(document_id, content, &vocabulary)
+        self.tokenizer
+            .document_to_sparse_vector(document_id, content, &vocabulary)
     }
 
     /// 更新词汇表
@@ -269,26 +292,28 @@ impl HybridSearchEngine {
 
         // 1. 密集向量搜索
         let dense_results = if let Some(dense_vector) = &request.dense_vector {
-            let results = self.dense_engine.lock().search(dense_vector, request.limit * 2)?;
-            results.into_iter()
-                .collect::<Vec<_>>()
+            let results = self
+                .dense_engine
+                .lock()
+                .search(dense_vector, request.limit * 2)?;
+            results.into_iter().collect::<Vec<_>>()
         } else {
             Vec::new()
         };
 
         // 2. 稀疏向量搜索（BM25）
         let sparse_results = if let Some(sparse_vector) = &request.sparse_vector {
-            self.sparse_engine.search_bm25(sparse_vector, request.limit * 2)?
+            self.sparse_engine
+                .search_bm25(sparse_vector, request.limit * 2)?
         } else if let Some(text_query) = &request.text_query {
             // 从文本查询构建稀疏向量
             let vocabulary = self.vocabulary.read();
             if !vocabulary.is_empty() {
-                let sparse_repr = self.tokenizer.document_to_sparse_vector(
-                    "query", 
-                    text_query, 
-                    &vocabulary
-                )?;
-                self.sparse_engine.search_bm25(&sparse_repr.sparse_vector, request.limit * 2)?
+                let sparse_repr =
+                    self.tokenizer
+                        .document_to_sparse_vector("query", text_query, &vocabulary)?;
+                self.sparse_engine
+                    .search_bm25(&sparse_repr.sparse_vector, request.limit * 2)?
             } else {
                 Vec::new()
             }
@@ -298,18 +323,15 @@ impl HybridSearchEngine {
 
         // 3. 简单文本搜索（作为后备）
         let text_results = if let Some(text_query) = &request.text_query {
-            self.simple_text_search(store, text_query, request.limit * 2).await?
+            self.simple_text_search(store, text_query, request.limit * 2)
+                .await?
         } else {
             Vec::new()
         };
 
         // 4. 融合结果
-        let fused_results = self.fuse_results(
-            &dense_results,
-            &sparse_results, 
-            &text_results,
-            request,
-        )?;
+        let fused_results =
+            self.fuse_results(&dense_results, &sparse_results, &text_results, request)?;
 
         // 5. 获取文档详情并构建最终结果
         for (doc_id, score, breakdown) in fused_results.into_iter().take(request.limit) {
@@ -319,7 +341,7 @@ impl HybridSearchEngine {
                 } else {
                     None
                 };
-                
+
                 let result = SearchResult {
                     document: doc,
                     score,
@@ -345,46 +367,54 @@ impl HybridSearchEngine {
             FusionStrategy::RRF { k } => {
                 self.rrf_fusion(dense_results, sparse_results, text_results, *k)
             }
-            FusionStrategy::Linear { dense_weight, sparse_weight, text_weight } => {
-                self.linear_fusion(
-                    dense_results, 
-                    sparse_results, 
-                    text_results,
-                    *dense_weight,
-                    *sparse_weight, 
-                    *text_weight
-                )
-            }
-            FusionStrategy::Normalized { dense_weight, sparse_weight, text_weight } => {
-                self.normalized_fusion(
-                    dense_results,
-                    sparse_results,
-                    text_results,
-                    *dense_weight,
-                    *sparse_weight,
-                    *text_weight
-                )
-            }
-            FusionStrategy::Learned { base_weights, query_type_adaptation, quality_adaptation } => {
-                self.learned_fusion(
-                    dense_results,
-                    sparse_results,
-                    text_results,
-                    base_weights,
-                    *query_type_adaptation,
-                    *quality_adaptation,
-                    request
-                )
-            }
-            FusionStrategy::Adaptive { initial_weights, learning_rate: _, history_size: _ } => {
-                self.adaptive_fusion(
-                    dense_results,
-                    sparse_results,
-                    text_results,
-                    initial_weights,
-                    request
-                )
-            }
+            FusionStrategy::Linear {
+                dense_weight,
+                sparse_weight,
+                text_weight,
+            } => self.linear_fusion(
+                dense_results,
+                sparse_results,
+                text_results,
+                *dense_weight,
+                *sparse_weight,
+                *text_weight,
+            ),
+            FusionStrategy::Normalized {
+                dense_weight,
+                sparse_weight,
+                text_weight,
+            } => self.normalized_fusion(
+                dense_results,
+                sparse_results,
+                text_results,
+                *dense_weight,
+                *sparse_weight,
+                *text_weight,
+            ),
+            FusionStrategy::Learned {
+                base_weights,
+                query_type_adaptation,
+                quality_adaptation,
+            } => self.learned_fusion(
+                dense_results,
+                sparse_results,
+                text_results,
+                base_weights,
+                *query_type_adaptation,
+                *quality_adaptation,
+                request,
+            ),
+            FusionStrategy::Adaptive {
+                initial_weights,
+                learning_rate: _,
+                history_size: _,
+            } => self.adaptive_fusion(
+                dense_results,
+                sparse_results,
+                text_results,
+                initial_weights,
+                request,
+            ),
         }
     }
 
@@ -451,9 +481,9 @@ impl HybridSearchEngine {
             .into_iter()
             .map(|(doc_id, (score, breakdown))| (doc_id, score, breakdown))
             .collect();
-        
+
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         Ok(results)
     }
 
@@ -522,9 +552,9 @@ impl HybridSearchEngine {
             .into_iter()
             .map(|(doc_id, (score, breakdown))| (doc_id, score, breakdown))
             .collect();
-        
+
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         Ok(results)
     }
 
@@ -560,17 +590,20 @@ impl HybridSearchEngine {
             return Vec::new();
         }
 
-        let max_score = results.iter()
+        let max_score = results
+            .iter()
             .map(|(_, score)| *score)
             .fold(f32::NEG_INFINITY, f32::max);
-        
-        let min_score = results.iter()
+
+        let min_score = results
+            .iter()
             .map(|(_, score)| *score)
             .fold(f32::INFINITY, f32::min);
 
         let score_range = max_score - min_score;
 
-        results.iter()
+        results
+            .iter()
             .map(|(doc_id, score)| {
                 let normalized_score = if score_range > 0.0 {
                     (score - min_score) / score_range
@@ -590,66 +623,66 @@ impl HybridSearchEngine {
         limit: usize,
     ) -> Result<Vec<(String, f32)>> {
         let text_lower = query_text.to_lowercase();
-        
+
         // 使用分页方式处理大量文档，避免一次性加载过多数据
         let mut all_results = Vec::new();
         let page_size = 500; // 每次处理500个文档
         let mut offset = 0;
         let max_docs = 10000; // 最多处理10000个文档
-        
+
         while offset < max_docs {
             let doc_ids = store.list_document_ids(offset, page_size).await?;
-            
+
             if doc_ids.is_empty() {
                 break; // 没有更多文档了
             }
-            
+
             for doc_id in doc_ids {
                 if let Some(doc) = store.get_document(&doc_id).await? {
-                let content_lower = doc.content.to_lowercase();
-                let title_lower = doc.title.to_lowercase();
-                
-                let mut score = 0.0;
-                
-                // 计算文本匹配分数
-                for term in text_lower.split_whitespace() {
-                    if content_lower.contains(term) {
-                        score += 1.0;
+                    let content_lower = doc.content.to_lowercase();
+                    let title_lower = doc.title.to_lowercase();
+
+                    let mut score = 0.0;
+
+                    // 计算文本匹配分数
+                    for term in text_lower.split_whitespace() {
+                        if content_lower.contains(term) {
+                            score += 1.0;
+                        }
+                        if title_lower.contains(term) {
+                            score += 2.0; // 标题匹配权重更高
+                        }
                     }
-                    if title_lower.contains(term) {
-                        score += 2.0; // 标题匹配权重更高
+
+                    if score > 0.0 {
+                        all_results.push((doc.id, score));
                     }
-                }
-                
-                if score > 0.0 {
-                    all_results.push((doc.id, score));
-                }
                 }
             }
-            
+
             offset += page_size;
         }
-        
+
         // 按分数排序并限制结果数量
         all_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         all_results.truncate(limit);
-        
+
         Ok(all_results)
     }
 
     /// 提取内容摘要
     fn extract_snippet(&self, content: &str, query_text: Option<&str>) -> String {
         let max_length = 200;
-        
+
         if let Some(query) = query_text {
             let query_lower = query.to_lowercase();
             let content_lower = content.to_lowercase();
-            
+
             if let Some(pos) = content_lower.find(&query_lower) {
                 let start = pos.saturating_sub(50);
                 let end = (pos + query.len() + 150).min(content.len());
                 let snippet = &content[start..end];
-                
+
                 if snippet.len() > max_length {
                     format!("...{}", &snippet[..max_length])
                 } else if start > 0 {
@@ -669,7 +702,7 @@ impl HybridSearchEngine {
     pub async fn remove_document(&self, document_id: &str) -> Result<bool> {
         let dense_removed = self.dense_engine.lock().remove_vector(document_id)?;
         let sparse_removed = self.sparse_engine.remove_document(document_id)?;
-        
+
         Ok(dense_removed || sparse_removed)
     }
 
@@ -690,10 +723,7 @@ impl HybridSearchEngine {
             let context = self.analyze_query_context(request);
             if let Some(model) = &self.fusion_model {
                 let model_guard = model.lock();
-                model_guard.predict_weights(
-                    request.text_query.as_deref().unwrap_or(""),
-                    &context
-                )
+                model_guard.predict_weights(request.text_query.as_deref().unwrap_or(""), &context)
             } else {
                 base_weights.clone()
             }
@@ -745,14 +775,14 @@ impl HybridSearchEngine {
     /// 分析查询上下文
     fn analyze_query_context(&self, request: &HybridSearchRequest) -> FusionContext {
         let query_text = request.text_query.as_deref().unwrap_or("");
-        
+
         // 简单的查询类型分析
         let query_type = if query_text.len() > 20 && query_text.contains(' ') {
-            QueryType::Semantic  // 长句子，语义查询
+            QueryType::Semantic // 长句子，语义查询
         } else if query_text.len() <= 5 || !query_text.contains(' ') {
-            QueryType::Keyword   // 短词，关键词查询
+            QueryType::Keyword // 短词，关键词查询
         } else {
-            QueryType::Mixed     // 混合查询
+            QueryType::Mixed // 混合查询
         };
 
         // 简单的时间上下文（可以扩展为更复杂的逻辑）
@@ -783,8 +813,10 @@ impl HybridSearchEngine {
         let total_quality = dense_quality + sparse_quality + text_quality;
         if total_quality > 0.0 {
             FusionWeights {
-                dense_weight: base_weights.dense_weight * (1.0 + dense_quality / total_quality * 0.2),
-                sparse_weight: base_weights.sparse_weight * (1.0 + sparse_quality / total_quality * 0.2),
+                dense_weight: base_weights.dense_weight
+                    * (1.0 + dense_quality / total_quality * 0.2),
+                sparse_weight: base_weights.sparse_weight
+                    * (1.0 + sparse_quality / total_quality * 0.2),
                 text_weight: base_weights.text_weight * (1.0 + text_quality / total_quality * 0.2),
             }
         } else {
@@ -802,7 +834,7 @@ impl HybridSearchEngine {
         let count_factor = (results.len() as f32).min(10.0) / 10.0;
         let avg_score = results.iter().map(|(_, score)| score).sum::<f32>() / results.len() as f32;
         let score_variance = self.calculate_score_variance(results);
-        
+
         count_factor * 0.3 + avg_score * 0.5 + (1.0 - score_variance).max(0.0) * 0.2
     }
 
@@ -813,10 +845,12 @@ impl HybridSearchEngine {
         }
 
         let avg = results.iter().map(|(_, score)| score).sum::<f32>() / results.len() as f32;
-        let variance = results.iter()
+        let variance = results
+            .iter()
             .map(|(_, score)| (score - avg).powi(2))
-            .sum::<f32>() / results.len() as f32;
-        
+            .sum::<f32>()
+            / results.len() as f32;
+
         variance.sqrt()
     }
 
@@ -829,9 +863,10 @@ impl HybridSearchEngine {
         // 获取相似查询的历史性能
         let history = self.query_history.lock();
         let query_text = request.text_query.as_deref().unwrap_or("");
-        
+
         // 找到相似的历史查询
-        let similar_queries: Vec<_> = history.iter()
+        let similar_queries: Vec<_> = history
+            .iter()
             .filter(|metrics| {
                 self.calculate_query_similarity(&metrics.query_text, query_text) > 0.7
             })
@@ -843,11 +878,13 @@ impl HybridSearchEngine {
 
         // 基于相似查询的性能调整权重
         let mut adjusted_weights = initial_weights.clone();
-        
-        let avg_satisfaction = similar_queries.iter()
+
+        let avg_satisfaction = similar_queries
+            .iter()
             .filter_map(|q| q.user_satisfaction)
             .map(|s| s as f32 / 5.0)
-            .sum::<f32>() / similar_queries.len() as f32;
+            .sum::<f32>()
+            / similar_queries.len() as f32;
 
         // 如果历史满意度低，增加探索性（减少主导策略的权重）
         if avg_satisfaction < 0.6 {
@@ -864,10 +901,10 @@ impl HybridSearchEngine {
         // 简单的词汇重叠相似度
         let words1: std::collections::HashSet<&str> = query1.split_whitespace().collect();
         let words2: std::collections::HashSet<&str> = query2.split_whitespace().collect();
-        
+
         let intersection = words1.intersection(&words2).count();
         let union = words1.union(&words2).count();
-        
+
         if union == 0 {
             0.0
         } else {
@@ -881,7 +918,7 @@ impl HybridSearchEngine {
         {
             let mut history = self.query_history.lock();
             history.push(metrics.clone());
-            
+
             // 限制历史记录大小
             if history.len() > 10000 {
                 history.remove(0);
@@ -909,12 +946,13 @@ impl HybridSearchEngine {
         if history.is_empty() {
             return 0.0;
         }
-        
+
         let total_queries = history.len() as f64;
-        let cache_hits = history.iter()
+        let cache_hits = history
+            .iter()
             .filter(|metrics| metrics.duration_ms < 10.0) // 假设小于10ms的查询为缓存命中
             .count() as f64;
-            
+
         if total_queries > 0.0 {
             cache_hits / total_queries
         } else {
@@ -926,12 +964,13 @@ impl HybridSearchEngine {
     pub fn get_stats(&self) -> crate::types::DatabaseStats {
         let sparse_stats = self.sparse_engine.get_stats();
         let dense_stats = self.dense_engine.lock().get_stats();
-        
+
         crate::types::DatabaseStats {
             document_count: sparse_stats.total_documents,
             dense_vector_count: dense_stats.vector_count,
             sparse_vector_count: sparse_stats.total_documents,
-            memory_usage_mb: (dense_stats.memory_usage as f64 / (1024.0 * 1024.0)) + self.sparse_engine.get_memory_usage_mb(),
+            memory_usage_mb: (dense_stats.memory_usage as f64 / (1024.0 * 1024.0))
+                + self.sparse_engine.get_memory_usage_mb(),
             dense_index_size_mb: dense_stats.memory_usage as f64 / (1024.0 * 1024.0),
             sparse_index_size_mb: self.sparse_engine.get_memory_usage_mb(),
             cache_hit_rate: self.calculate_cache_hit_rate(),
@@ -944,8 +983,8 @@ impl HybridSearchEngine {
 mod tests {
     use super::*;
     use crate::{
-        sparse::{SparseIndex, BM25Parameters},
-        index::{HnswVectorIndex},
+        index::HnswVectorIndex,
+        sparse::{BM25Parameters, SparseIndex},
         types::FusionStrategy,
     };
 
@@ -953,39 +992,35 @@ mod tests {
     fn test_rrf_fusion() {
         let dense_engine = Arc::new(Mutex::new(HnswVectorIndex::new()));
         let sparse_engine = Arc::new(SparseIndex::new(BM25Parameters::default()));
-        
-        let engine = HybridSearchEngine::new(
-            dense_engine,
-            sparse_engine,
-            FusionStrategy::RRF { k: 60.0 },
-        );
 
-        let dense_results = vec![
-            ("doc1".to_string(), 0.9),
-            ("doc2".to_string(), 0.8),
-        ];
-        
-        let sparse_results = vec![
-            ("doc2".to_string(), 5.0),
-            ("doc3".to_string(), 4.0),
-        ];
-        
-        let text_results = vec![
-            ("doc1".to_string(), 2.0),
-            ("doc4".to_string(), 1.0),
-        ];
+        let engine =
+            HybridSearchEngine::new(dense_engine, sparse_engine, FusionStrategy::RRF { k: 60.0 });
 
-        let fused = engine.rrf_fusion(&dense_results, &sparse_results, &text_results, 60.0).unwrap();
-        
+        let dense_results = vec![("doc1".to_string(), 0.9), ("doc2".to_string(), 0.8)];
+
+        let sparse_results = vec![("doc2".to_string(), 5.0), ("doc3".to_string(), 4.0)];
+
+        let text_results = vec![("doc1".to_string(), 2.0), ("doc4".to_string(), 1.0)];
+
+        let fused = engine
+            .rrf_fusion(&dense_results, &sparse_results, &text_results, 60.0)
+            .unwrap();
+
         // 检查结果
         assert!(!fused.is_empty());
-        
+
         // doc1和doc2应该有更高的分数（出现在多个结果中）
-        let doc1_score = fused.iter().find(|(id, _, _)| id == "doc1").map(|(_, score, _)| *score);
-        let doc3_score = fused.iter().find(|(id, _, _)| id == "doc3").map(|(_, score, _)| *score);
-        
+        let doc1_score = fused
+            .iter()
+            .find(|(id, _, _)| id == "doc1")
+            .map(|(_, score, _)| *score);
+        let doc3_score = fused
+            .iter()
+            .find(|(id, _, _)| id == "doc3")
+            .map(|(_, score, _)| *score);
+
         if let (Some(doc1), Some(doc3)) = (doc1_score, doc3_score) {
             assert!(doc1 > doc3, "doc1 should have higher score than doc3");
         }
     }
-} 
+}

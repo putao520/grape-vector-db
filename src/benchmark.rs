@@ -1,5 +1,5 @@
 //! 基准测试模块
-//! 
+//!
 //! 提供性能基准测试功能，包括：
 //! - 搜索性能测试
 //! - 融合策略比较
@@ -7,16 +7,14 @@
 //! - 延迟统计
 
 use crate::{
-    types::{
-        HybridSearchRequest, FusionStrategy, FusionWeights, SearchResult
-    },
+    errors::Result,
     hybrid::HybridSearchEngine,
     storage::VectorStore,
-    errors::Result,
+    types::{FusionStrategy, FusionWeights, HybridSearchRequest, SearchResult},
 };
-use std::time::Instant;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
+use std::time::Instant;
 
 /// 基准测试配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,37 +136,65 @@ impl BenchmarkSuite {
         let strategies = vec![
             ("RRF_k60", FusionStrategy::RRF { k: 60.0 }),
             ("RRF_k30", FusionStrategy::RRF { k: 30.0 }),
-            ("Linear_Balanced", FusionStrategy::Linear { 
-                dense_weight: 0.5, sparse_weight: 0.3, text_weight: 0.2 
-            }),
-            ("Linear_Dense_Heavy", FusionStrategy::Linear { 
-                dense_weight: 0.7, sparse_weight: 0.2, text_weight: 0.1 
-            }),
-            ("Linear_Sparse_Heavy", FusionStrategy::Linear { 
-                dense_weight: 0.3, sparse_weight: 0.6, text_weight: 0.1 
-            }),
-            ("Normalized_Balanced", FusionStrategy::Normalized { 
-                dense_weight: 0.5, sparse_weight: 0.3, text_weight: 0.2 
-            }),
-            ("Learned_Adaptive", FusionStrategy::Learned {
-                base_weights: FusionWeights::default(),
-                query_type_adaptation: true,
-                quality_adaptation: true,
-            }),
-            ("Adaptive_Learning", FusionStrategy::Adaptive {
-                initial_weights: FusionWeights::default(),
-                learning_rate: 0.01,
-                history_size: 1000,
-            }),
+            (
+                "Linear_Balanced",
+                FusionStrategy::Linear {
+                    dense_weight: 0.5,
+                    sparse_weight: 0.3,
+                    text_weight: 0.2,
+                },
+            ),
+            (
+                "Linear_Dense_Heavy",
+                FusionStrategy::Linear {
+                    dense_weight: 0.7,
+                    sparse_weight: 0.2,
+                    text_weight: 0.1,
+                },
+            ),
+            (
+                "Linear_Sparse_Heavy",
+                FusionStrategy::Linear {
+                    dense_weight: 0.3,
+                    sparse_weight: 0.6,
+                    text_weight: 0.1,
+                },
+            ),
+            (
+                "Normalized_Balanced",
+                FusionStrategy::Normalized {
+                    dense_weight: 0.5,
+                    sparse_weight: 0.3,
+                    text_weight: 0.2,
+                },
+            ),
+            (
+                "Learned_Adaptive",
+                FusionStrategy::Learned {
+                    base_weights: FusionWeights::default(),
+                    query_type_adaptation: true,
+                    quality_adaptation: true,
+                },
+            ),
+            (
+                "Adaptive_Learning",
+                FusionStrategy::Adaptive {
+                    initial_weights: FusionWeights::default(),
+                    learning_rate: 0.01,
+                    history_size: 1000,
+                },
+            ),
         ];
 
         let mut results = Vec::new();
 
         for (name, strategy) in strategies {
             println!("测试融合策略: {}", name);
-            
+
             // 创建临时引擎（实际应该重新配置现有引擎）
-            let result = self.benchmark_strategy(engine, store, &strategy, name).await?;
+            let result = self
+                .benchmark_strategy(engine, store, &strategy, name)
+                .await?;
             results.push(result);
         }
 
@@ -200,21 +226,21 @@ impl BenchmarkSuite {
         // 正式测试
         for query in &self.test_queries {
             let query_start = Instant::now();
-            
+
             match self.execute_query(engine, store, query).await {
                 Ok(results) => {
                     let latency = query_start.elapsed().as_millis() as f64;
                     latencies.push(latency);
-                    
+
                     // 计算精确度和召回率
                     let (precision, recall) = self.calculate_precision_recall(query, &results);
                     precisions.push(precision);
                     recalls.push(recall);
-                    
+
                     // 计算NDCG@10
                     let ndcg = self.calculate_ndcg(query, &results, 10);
                     ndcgs.push(ndcg);
-                    
+
                     success_count += 1;
                 }
                 Err(_) => {
@@ -225,7 +251,7 @@ impl BenchmarkSuite {
         }
 
         let total_time = start_time.elapsed();
-        
+
         // 计算统计指标
         let avg_latency = latencies.iter().sum::<f64>() / latencies.len() as f64;
         let throughput = success_count as f64 / total_time.as_secs_f64();
@@ -234,7 +260,7 @@ impl BenchmarkSuite {
         // 计算百分位数
         let mut sorted_latencies = latencies.clone();
         sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
+
         let p50 = self.percentile(&sorted_latencies, 50.0);
         let p95 = self.percentile(&sorted_latencies, 95.0);
         let p99 = self.percentile(&sorted_latencies, 99.0);
@@ -278,14 +304,17 @@ impl BenchmarkSuite {
     }
 
     /// 计算精确度和召回率
-    fn calculate_precision_recall(&self, query: &TestQuery, results: &[SearchResult]) -> (f64, f64) {
+    fn calculate_precision_recall(
+        &self,
+        query: &TestQuery,
+        results: &[SearchResult],
+    ) -> (f64, f64) {
         let relevant_docs: std::collections::HashSet<_> = query.expected_results.iter().collect();
-        let retrieved_docs: std::collections::HashSet<_> = results.iter()
-            .map(|r| &r.document.id)
-            .collect();
+        let retrieved_docs: std::collections::HashSet<_> =
+            results.iter().map(|r| &r.document.id).collect();
 
         let relevant_retrieved = relevant_docs.intersection(&retrieved_docs).count();
-        
+
         let precision = if results.is_empty() {
             0.0
         } else {
@@ -306,7 +335,7 @@ impl BenchmarkSuite {
         if let Some(relevance) = self.relevance_judgments.get(&query.id) {
             let dcg = self.calculate_dcg(results, relevance, k);
             let idcg = self.calculate_ideal_dcg(relevance, k);
-            
+
             if idcg > 0.0 {
                 dcg / idcg
             } else {
@@ -319,12 +348,13 @@ impl BenchmarkSuite {
 
     /// 计算DCG
     fn calculate_dcg(
-        &self, 
-        results: &[SearchResult], 
-        relevance: &HashMap<String, f32>, 
-        k: usize
+        &self,
+        results: &[SearchResult],
+        relevance: &HashMap<String, f32>,
+        k: usize,
     ) -> f64 {
-        results.iter()
+        results
+            .iter()
             .take(k)
             .enumerate()
             .map(|(i, result)| {
@@ -339,8 +369,9 @@ impl BenchmarkSuite {
     fn calculate_ideal_dcg(&self, relevance: &HashMap<String, f32>, k: usize) -> f64 {
         let mut rel_scores: Vec<f32> = relevance.values().copied().collect();
         rel_scores.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        
-        rel_scores.iter()
+
+        rel_scores
+            .iter()
             .take(k)
             .enumerate()
             .map(|(i, &rel)| {
@@ -355,7 +386,7 @@ impl BenchmarkSuite {
         if sorted_data.is_empty() {
             return 0.0;
         }
-        
+
         let index = (percentile / 100.0 * (sorted_data.len() - 1) as f64).round() as usize;
         sorted_data.get(index).copied().unwrap_or(0.0)
     }
@@ -380,7 +411,7 @@ impl BenchmarkSuite {
             "容器化部署策略",
             "监控与日志系统",
         ];
-        
+
         queries[index % queries.len()].to_string()
     }
 
@@ -399,7 +430,7 @@ impl BenchmarkSuite {
     /// 导出基准测试报告
     pub fn export_report(&self, results: &[BenchmarkResult]) -> Result<String> {
         let mut report = String::new();
-        
+
         report.push_str("# 向量数据库混合搜索性能基准测试报告\n\n");
         report.push_str("测试配置:\n");
         report.push_str(&format!("- 查询数量: {}\n", self.config.num_queries));
@@ -408,8 +439,12 @@ impl BenchmarkSuite {
         report.push_str(&format!("- 向量维度: {}\n\n", self.config.vector_dimension));
 
         report.push_str("## 性能对比结果\n\n");
-        report.push_str("| 策略 | 平均延迟(ms) | P95延迟(ms) | 吞吐量(QPS) | 精确度 | 召回率 | NDCG@10 |\n");
-        report.push_str("|------|------------|------------|------------|--------|--------|---------|\n");
+        report.push_str(
+            "| 策略 | 平均延迟(ms) | P95延迟(ms) | 吞吐量(QPS) | 精确度 | 召回率 | NDCG@10 |\n",
+        );
+        report.push_str(
+            "|------|------------|------------|------------|--------|--------|---------|\n",
+        );
 
         for result in results {
             report.push_str(&format!(
@@ -425,23 +460,35 @@ impl BenchmarkSuite {
         }
 
         report.push_str("\n## 详细分析\n\n");
-        
+
         // 找出最佳策略
-        let best_latency = results.iter()
+        let best_latency = results
+            .iter()
             .min_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap());
-        let best_precision = results.iter()
+        let best_precision = results
+            .iter()
             .max_by(|a, b| a.avg_precision.partial_cmp(&b.avg_precision).unwrap());
-        let best_throughput = results.iter()
+        let best_throughput = results
+            .iter()
             .max_by(|a, b| a.throughput_qps.partial_cmp(&b.throughput_qps).unwrap());
 
         if let Some(best) = best_latency {
-            report.push_str(&format!("**最低延迟策略**: {} ({:.2}ms)\n", best.strategy_name, best.avg_latency_ms));
+            report.push_str(&format!(
+                "**最低延迟策略**: {} ({:.2}ms)\n",
+                best.strategy_name, best.avg_latency_ms
+            ));
         }
         if let Some(best) = best_precision {
-            report.push_str(&format!("**最高精确度策略**: {} ({:.3})\n", best.strategy_name, best.avg_precision));
+            report.push_str(&format!(
+                "**最高精确度策略**: {} ({:.3})\n",
+                best.strategy_name, best.avg_precision
+            ));
         }
         if let Some(best) = best_throughput {
-            report.push_str(&format!("**最高吞吐量策略**: {} ({:.2} QPS)\n", best.strategy_name, best.throughput_qps));
+            report.push_str(&format!(
+                "**最高吞吐量策略**: {} ({:.2} QPS)\n",
+                best.strategy_name, best.throughput_qps
+            ));
         }
 
         Ok(report)
@@ -456,15 +503,16 @@ pub fn create_concurrent_benchmark_config(
 ) -> (Vec<Vec<TestQuery>>, BenchmarkConfig) {
     // 将查询分成批次，返回配置供外部使用
     let chunk_size = queries.len().div_ceil(concurrency);
-    let chunks: Vec<Vec<TestQuery>> = queries.chunks(chunk_size)
+    let chunks: Vec<Vec<TestQuery>> = queries
+        .chunks(chunk_size)
         .map(|chunk| chunk.to_vec())
         .collect();
-    
+
     let config = BenchmarkConfig {
         num_queries: queries.len(),
         concurrent_queries: concurrency,
         ..Default::default()
     };
-    
+
     (chunks, config)
-} 
+}

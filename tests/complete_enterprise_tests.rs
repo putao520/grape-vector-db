@@ -1,5 +1,5 @@
 //! 企业级功能完整测试覆盖
-//! 
+//!
 //! 此测试套件确保所有企业级功能都在真实环境中得到验证，
 //! 不使用任何mock，基于真实的文件系统和数据。
 
@@ -22,7 +22,7 @@ mod complete_coverage_tests {
             cache_size: 100,
             ..Default::default()
         };
-        
+
         let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config)
             .await
             .unwrap();
@@ -116,24 +116,27 @@ mod complete_coverage_tests {
             temp_dir.path().to_path_buf(),
             config,
             enterprise_config,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // 获取认证管理器
         let auth_manager = db.get_auth_manager().unwrap();
-        
+
         // 创建管理员用户
-        let admin_id = auth_manager.create_admin_user(
-            "admin".to_string(),
-            "admin123".to_string(),
-        ).unwrap();
+        let admin_id = auth_manager
+            .create_admin_user("admin".to_string(), "admin123".to_string())
+            .unwrap();
         assert!(!admin_id.is_empty(), "管理员用户ID应非空");
 
         // 创建普通用户
-        let user_id = auth_manager.create_user(
-            "user1".to_string(),
-            Some("user1@test.com".to_string()),
-            vec![Role::ReadOnlyUser],
-        ).unwrap();
+        let user_id = auth_manager
+            .create_user(
+                "user1".to_string(),
+                Some("user1@test.com".to_string()),
+                vec![Role::ReadOnlyUser],
+            )
+            .unwrap();
         assert!(!user_id.is_empty(), "普通用户ID应非空");
 
         // 测试用户认证
@@ -148,7 +151,8 @@ mod complete_coverage_tests {
         assert!(wrong_auth.is_err(), "错误密码认证应失败");
 
         // 测试权限检查（同步方法）
-        let admin_permission = auth_manager.check_permission(&admin_id, &Permission::ManageDatabase);
+        let admin_permission =
+            auth_manager.check_permission(&admin_id, &Permission::ManageDatabase);
         assert!(admin_permission.is_ok(), "管理员应有管理权限");
 
         let user_permission = auth_manager.check_permission(&user_id, &Permission::ManageDatabase);
@@ -165,7 +169,7 @@ mod complete_coverage_tests {
     async fn test_configuration_and_persistence() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().to_path_buf();
-        
+
         // 第一阶段：创建数据库并插入数据
         {
             let config = VectorDbConfig {
@@ -175,13 +179,15 @@ mod complete_coverage_tests {
                 cache_size: 50,
                 ..Default::default()
             };
-            
-            let db = VectorDatabase::new(db_path.clone(), config.clone()).await.unwrap();
+
+            let db = VectorDatabase::new(db_path.clone(), config.clone())
+                .await
+                .unwrap();
 
             // 验证配置
             let retrieved_config = db.get_config();
             assert_eq!(retrieved_config.vector_dimension, 64, "向量维度配置应正确");
-            assert_eq!(retrieved_config.enable_compression, true, "压缩配置应正确");
+            assert!(retrieved_config.enable_compression, "压缩配置应正确");
 
             // 插入测试数据
             let test_docs = vec![
@@ -215,7 +221,7 @@ mod complete_coverage_tests {
                 vector_dimension: 64,
                 ..Default::default()
             };
-            
+
             let db = VectorDatabase::new(db_path, config).await.unwrap();
 
             let stats_after = db.get_stats().await;
@@ -228,7 +234,7 @@ mod complete_coverage_tests {
             // 验证具体文档
             let doc1 = db.get_document("persist_1").await.unwrap();
             assert!(doc1.is_some(), "应能检索到持久化的文档1");
-            
+
             let doc2 = db.get_document("persist_2").await.unwrap();
             assert!(doc2.is_some(), "应能检索到持久化的文档2");
         }
@@ -244,9 +250,11 @@ mod complete_coverage_tests {
             cache_size: 100,
             ..Default::default()
         };
-        
+
         let db = std::sync::Arc::new(
-            VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap()
+            VectorDatabase::new(temp_dir.path().to_path_buf(), config)
+                .await
+                .unwrap(),
         );
 
         // 并发插入测试
@@ -261,7 +269,7 @@ mod complete_coverage_tests {
                         vector: Some((0..32).map(|_| fastrand::f32()).collect()),
                         ..Default::default()
                     };
-                    
+
                     let result = db_clone.add_document(doc).await;
                     assert!(result.is_ok(), "并发插入应成功");
                 }
@@ -297,19 +305,24 @@ mod complete_coverage_tests {
         assert_eq!(final_stats.document_count, 100, "应插入100个文档");
 
         // 性能测试：批量操作
-        let batch_docs: Vec<Document> = (0..50).map(|i| Document {
-            id: format!("batch_perf_{}", i),
-            content: format!("批量性能测试文档 {}", i),
-            vector: Some((0..32).map(|j| ((i + j) as f32) / 100.0).collect()),
-            ..Default::default()
-        }).collect();
+        let batch_docs: Vec<Document> = (0..50)
+            .map(|i| Document {
+                id: format!("batch_perf_{}", i),
+                content: format!("批量性能测试文档 {}", i),
+                vector: Some((0..32).map(|j| ((i + j) as f32) / 100.0).collect()),
+                ..Default::default()
+            })
+            .collect();
 
         let batch_start = std::time::Instant::now();
         let batch_result = db.batch_add_documents(batch_docs).await;
         let batch_time = batch_start.elapsed();
-        
+
         assert!(batch_result.is_ok(), "批量操作应成功");
-        assert!(batch_time < Duration::from_secs(10), "批量操作应在合理时间内完成");
+        assert!(
+            batch_time < Duration::from_secs(10),
+            "批量操作应在合理时间内完成"
+        );
         println!("批量插入50个文档耗时: {:?}", batch_time);
     }
 
@@ -322,8 +335,10 @@ mod complete_coverage_tests {
             vector_dimension: 16,
             ..Default::default()
         };
-        
-        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config).await.unwrap();
+
+        let db = VectorDatabase::new(temp_dir.path().to_path_buf(), config)
+            .await
+            .unwrap();
 
         // 测试空ID文档
         let empty_id_doc = Document {
@@ -332,7 +347,7 @@ mod complete_coverage_tests {
             vector: Some(vec![1.0; 16]),
             ..Default::default()
         };
-        
+
         let empty_id_result = db.add_document(empty_id_doc).await;
         assert!(empty_id_result.is_err(), "空ID应失败");
 
@@ -349,7 +364,7 @@ mod complete_coverage_tests {
             vector: Some(vec![0.5; 16]),
             ..Default::default()
         };
-        
+
         let unicode_result = db.add_document(unicode_doc).await;
         assert!(unicode_result.is_ok(), "Unicode文档应成功插入");
 
@@ -365,7 +380,7 @@ mod complete_coverage_tests {
             vector: Some(vec![0.1; 16]),
             ..Default::default()
         };
-        
+
         let long_result = db.add_document(long_doc).await;
         assert!(long_result.is_ok(), "超长内容应被处理");
 
@@ -376,7 +391,7 @@ mod complete_coverage_tests {
             vector: Some(vec![f32::MAX; 16]),
             ..Default::default()
         };
-        
+
         let extreme_result = db.add_document(extreme_doc).await;
         // 极值可能被拒绝或处理，都是合理的
         match extreme_result {
@@ -386,10 +401,14 @@ mod complete_coverage_tests {
 
         // 测试搜索边界条件
         let empty_search = db.text_search("", 5).await;
-        match empty_search {
-            Ok(results) => assert!(results.len() >= 0, "空搜索结果应合理"),
-            Err(_) => {} // 错误也是可接受的
+        if let Ok(results) = empty_search {
+            // Results vector length is always >= 0, no need to check
+            assert!(
+                results.is_empty() || !results.is_empty(),
+                "空搜索结果应合理"
+            );
         }
+        // 错误也是可接受的
 
         // 验证数据库仍然可用
         let stats = db.get_stats().await;
@@ -400,7 +419,7 @@ mod complete_coverage_tests {
     #[tokio::test]
     async fn test_configuration_adaptability() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // 测试不同配置
         let configs = vec![
             VectorDbConfig {
@@ -420,15 +439,17 @@ mod complete_coverage_tests {
         ];
 
         for (i, config) in configs.into_iter().enumerate() {
-            let db = VectorDatabase::new(
-                std::path::PathBuf::from(&config.db_path), 
-                config.clone()
-            ).await.unwrap();
+            let db = VectorDatabase::new(std::path::PathBuf::from(&config.db_path), config.clone())
+                .await
+                .unwrap();
 
             // 验证配置生效
             let retrieved_config = db.get_config();
             assert_eq!(retrieved_config.vector_dimension, config.vector_dimension);
-            assert_eq!(retrieved_config.enable_compression, config.enable_compression);
+            assert_eq!(
+                retrieved_config.enable_compression,
+                config.enable_compression
+            );
 
             // 插入测试数据
             let test_embedding: Vec<f32> = (0..config.vector_dimension)

@@ -2,39 +2,39 @@
 //!
 //! 提供企业级向量数据库所需的安全、认证、监控和管理功能
 
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use parking_lot::RwLock;
 use uuid::Uuid;
-use sha2::{Sha256, Digest};
 
 /// 企业级错误类型
 #[derive(Error, Debug)]
 pub enum EnterpriseError {
     #[error("认证失败: {0}")]
     AuthenticationFailed(String),
-    
+
     #[error("授权失败: {0}")]
     AuthorizationFailed(String),
-    
+
     #[error("令牌无效: {0}")]
     InvalidToken(String),
-    
+
     #[error("令牌已过期")]
     TokenExpired,
-    
+
     #[error("权限不足: 需要权限 {required}, 当前权限 {current}")]
     InsufficientPermissions { required: String, current: String },
-    
+
     #[error("安全策略违规: {0}")]
     SecurityPolicyViolation(String),
-    
+
     #[error("审计日志错误: {0}")]
     AuditLogError(String),
-    
+
     #[error("配置错误: {0}")]
     ConfigurationError(String),
 }
@@ -63,17 +63,17 @@ impl Role {
     pub fn has_permission(&self, permission: &Permission) -> bool {
         match self {
             Role::SuperAdmin => true,
-            Role::DatabaseAdmin => matches!(permission, 
-                Permission::ReadData | 
-                Permission::WriteData | 
-                Permission::ManageDatabase | 
-                Permission::ManageIndexes |
-                Permission::ViewMetrics
+            Role::DatabaseAdmin => matches!(
+                permission,
+                Permission::ReadData
+                    | Permission::WriteData
+                    | Permission::ManageDatabase
+                    | Permission::ManageIndexes
+                    | Permission::ViewMetrics
             ),
-            Role::DataManager => matches!(permission, 
-                Permission::ReadData | 
-                Permission::WriteData |
-                Permission::ViewMetrics
+            Role::DataManager => matches!(
+                permission,
+                Permission::ReadData | Permission::WriteData | Permission::ViewMetrics
             ),
             Role::ReadOnlyUser => matches!(permission, Permission::ReadData),
             Role::SystemMonitor => matches!(permission, Permission::ViewMetrics),
@@ -122,7 +122,9 @@ impl User {
         if !self.is_active {
             return false;
         }
-        self.roles.iter().any(|role| role.has_permission(permission))
+        self.roles
+            .iter()
+            .any(|role| role.has_permission(permission))
     }
 
     /// 创建新的API密钥
@@ -161,7 +163,7 @@ impl ApiKey {
         let key = Self::generate_key();
         let created_at = SystemTime::now();
         let expires_at = expires_in.map(|duration| created_at + duration);
-        
+
         Self {
             key,
             name,
@@ -177,7 +179,13 @@ impl ApiKey {
         let uuid = Uuid::new_v4();
         let mut hasher = Sha256::new();
         hasher.update(uuid.as_bytes());
-        hasher.update(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos().to_be_bytes());
+        hasher.update(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                .to_be_bytes(),
+        );
         format!("gvdb_{}", &hex::encode(hasher.finalize())[..32])
     }
 
@@ -186,7 +194,7 @@ impl ApiKey {
         if !self.is_active {
             return false;
         }
-        
+
         if let Some(expires_at) = self.expires_at {
             SystemTime::now() < expires_at
         } else {
@@ -214,9 +222,12 @@ pub struct JwtToken {
 impl JwtToken {
     /// 创建新的JWT令牌
     pub fn new(user: &User, expires_in: Duration) -> Self {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let expires_at = now + expires_in.as_secs();
-        
+
         Self {
             user_id: user.id.clone(),
             username: user.username.clone(),
@@ -229,7 +240,10 @@ impl JwtToken {
 
     /// 检查令牌是否有效
     pub fn is_valid(&self) -> bool {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         now < self.expires_at
     }
 
@@ -238,7 +252,9 @@ impl JwtToken {
         if !self.is_valid() {
             return false;
         }
-        self.roles.iter().any(|role| role.has_permission(permission))
+        self.roles
+            .iter()
+            .any(|role| role.has_permission(permission))
     }
 }
 
@@ -295,7 +311,7 @@ impl Default for SecurityPolicy {
             require_strong_password: true,
             max_login_attempts: 5,
             account_lockout_duration: Duration::from_secs(300), // 5分钟
-            jwt_expiry: Duration::from_secs(3600), // 1小时
+            jwt_expiry: Duration::from_secs(3600),              // 1小时
             api_key_default_expiry: Some(Duration::from_secs(86400 * 30)), // 30天
             enable_ip_whitelist: false,
             ip_whitelist: vec![],
@@ -340,10 +356,14 @@ impl AuthenticationManager {
     }
 
     /// 创建默认管理员用户
-    pub fn create_admin_user(&self, username: String, password: String) -> EnterpriseResult<String> {
+    pub fn create_admin_user(
+        &self,
+        username: String,
+        password: String,
+    ) -> EnterpriseResult<String> {
         let user_id = Uuid::new_v4().to_string();
         let password_hash = Self::hash_password(&password);
-        
+
         let user = User {
             id: user_id.clone(),
             username: username.clone(),
@@ -374,11 +394,16 @@ impl AuthenticationManager {
     }
 
     /// 创建用户
-    pub fn create_user(&self, username: String, email: Option<String>, roles: Vec<Role>) -> EnterpriseResult<String> {
+    pub fn create_user(
+        &self,
+        username: String,
+        email: Option<String>,
+        roles: Vec<Role>,
+    ) -> EnterpriseResult<String> {
         let user_id = Uuid::new_v4().to_string();
         // 为普通用户设置默认密码 "password123"
         let password_hash = Self::hash_password("password123");
-        
+
         let user = User {
             id: user_id.clone(),
             username: username.clone(),
@@ -394,13 +419,14 @@ impl AuthenticationManager {
 
         let mut users = self.users.write();
         if users.values().any(|u| u.username == username) {
-            return Err(EnterpriseError::ConfigurationError(
-                format!("用户名 '{}' 已存在", username)
-            ));
+            return Err(EnterpriseError::ConfigurationError(format!(
+                "用户名 '{}' 已存在",
+                username
+            )));
         }
 
         users.insert(user_id.clone(), user);
-        
+
         self.log_audit_event(
             None,
             "CREATE_USER".to_string(),
@@ -420,7 +446,7 @@ impl AuthenticationManager {
         self.check_login_attempts(username)?;
 
         let users = self.users.read();
-        
+
         if let Some(user) = users.values().find(|u| u.username == username) {
             if user.is_active {
                 // 验证密码
@@ -428,7 +454,7 @@ impl AuthenticationManager {
                     if Self::verify_password(password, stored_hash) {
                         // 密码正确
                         self.clear_login_attempts(username);
-                        
+
                         self.log_audit_event(
                             Some(user.id.clone()),
                             "USER_LOGIN".to_string(),
@@ -438,7 +464,7 @@ impl AuthenticationManager {
                             None,
                             None,
                         );
-                        
+
                         return Ok(user.clone());
                     }
                 }
@@ -447,30 +473,34 @@ impl AuthenticationManager {
 
         // 记录登录失败
         self.record_login_failure(username);
-        
+
         self.log_audit_event(
             None,
             "USER_LOGIN_FAILED".to_string(),
             "authentication".to_string(),
-            [("username".to_string(), username.to_string())].into_iter().collect(),
+            [("username".to_string(), username.to_string())]
+                .into_iter()
+                .collect(),
             AuditResult::Failure("Invalid credentials".to_string()),
             None,
             None,
         );
 
-        Err(EnterpriseError::AuthenticationFailed("用户名或密码错误".to_string()))
+        Err(EnterpriseError::AuthenticationFailed(
+            "用户名或密码错误".to_string(),
+        ))
     }
 
     /// 验证API密钥
     pub fn authenticate_api_key(&self, api_key: &str) -> EnterpriseResult<User> {
         let mut users = self.users.write(); // 需要写锁来更新最后使用时间
-        
+
         for user in users.values_mut() {
             for key in &mut user.api_keys {
                 if key.key == api_key && key.is_valid() {
                     // 更新最后使用时间
                     key.mark_used();
-                    
+
                     self.log_audit_event(
                         Some(user.id.clone()),
                         "API_KEY_AUTH".to_string(),
@@ -495,14 +525,16 @@ impl AuthenticationManager {
             None,
         );
 
-        Err(EnterpriseError::AuthenticationFailed("无效的API密钥".to_string()))
+        Err(EnterpriseError::AuthenticationFailed(
+            "无效的API密钥".to_string(),
+        ))
     }
 
     /// 验证JWT令牌
     pub fn authenticate_jwt(&self, token_str: &str) -> EnterpriseResult<JwtToken> {
         // 简化实现：在实际应用中应该使用真正的JWT库
         let sessions = self.sessions.read();
-        
+
         for token in sessions.values() {
             if token.session_id == token_str && token.is_valid() {
                 self.log_audit_event(
@@ -528,13 +560,15 @@ impl AuthenticationManager {
             None,
         );
 
-        Err(EnterpriseError::AuthenticationFailed("无效的JWT令牌".to_string()))
+        Err(EnterpriseError::AuthenticationFailed(
+            "无效的JWT令牌".to_string(),
+        ))
     }
 
     /// 检查权限
     pub fn check_permission(&self, user_id: &str, permission: &Permission) -> EnterpriseResult<()> {
         let users = self.users.read();
-        
+
         if let Some(user) = users.get(user_id) {
             if user.has_permission(permission) {
                 Ok(())
@@ -550,11 +584,18 @@ impl AuthenticationManager {
                 );
                 Err(EnterpriseError::InsufficientPermissions {
                     required: format!("{:?}", permission),
-                    current: user.roles.iter().map(|r| format!("{:?}", r)).collect::<Vec<_>>().join(", "),
+                    current: user
+                        .roles
+                        .iter()
+                        .map(|r| format!("{:?}", r))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 })
             }
         } else {
-            Err(EnterpriseError::AuthenticationFailed("用户不存在".to_string()))
+            Err(EnterpriseError::AuthenticationFailed(
+                "用户不存在".to_string(),
+            ))
         }
     }
 
@@ -595,15 +636,16 @@ impl AuthenticationManager {
     fn check_login_attempts(&self, username: &str) -> EnterpriseResult<()> {
         let mut login_attempts = self.login_attempts.write();
         let security_policy = self.security_policy.read();
-        
+
         if let Some((attempts, last_attempt)) = login_attempts.get(username) {
             if *attempts >= security_policy.max_login_attempts {
                 let time_since_last = last_attempt.elapsed();
-                if time_since_last < Duration::from_secs(300) { // 5分钟锁定
-                    return Err(EnterpriseError::AuthenticationFailed(
-                        format!("账户被临时锁定，请在{}秒后重试", 
-                            300 - time_since_last.as_secs())
-                    ));
+                if time_since_last < Duration::from_secs(300) {
+                    // 5分钟锁定
+                    return Err(EnterpriseError::AuthenticationFailed(format!(
+                        "账户被临时锁定，请在{}秒后重试",
+                        300 - time_since_last.as_secs()
+                    )));
                 } else {
                     // 重置尝试次数
                     login_attempts.remove(username);
@@ -616,7 +658,9 @@ impl AuthenticationManager {
     /// 记录登录失败
     fn record_login_failure(&self, username: &str) {
         let mut login_attempts = self.login_attempts.write();
-        let entry = login_attempts.entry(username.to_string()).or_insert((0, Instant::now()));
+        let entry = login_attempts
+            .entry(username.to_string())
+            .or_insert((0, Instant::now()));
         entry.0 += 1;
         entry.1 = Instant::now();
     }
@@ -631,7 +675,7 @@ impl AuthenticationManager {
     pub fn get_audit_logs(&self, limit: Option<usize>) -> Vec<AuditLogEntry> {
         let audit_log = self.audit_log.read();
         let logs = audit_log.clone();
-        
+
         if let Some(limit) = limit {
             logs.into_iter().rev().take(limit).collect()
         } else {
@@ -670,12 +714,17 @@ impl AuthenticationManager {
     }
 
     /// 为用户创建API密钥
-    pub fn create_api_key_for_user(&self, user_id: &str, name: String, expires_in: Option<Duration>) -> EnterpriseResult<String> {
+    pub fn create_api_key_for_user(
+        &self,
+        user_id: &str,
+        name: String,
+        expires_in: Option<Duration>,
+    ) -> EnterpriseResult<String> {
         let mut users = self.users.write();
-        
+
         if let Some(user) = users.get_mut(user_id) {
             let api_key = user.create_api_key(name.clone(), expires_in);
-            
+
             self.log_audit_event(
                 Some(user_id.to_string()),
                 "CREATE_API_KEY".to_string(),
@@ -685,20 +734,22 @@ impl AuthenticationManager {
                 None,
                 None,
             );
-            
+
             Ok(api_key)
         } else {
-            Err(EnterpriseError::AuthenticationFailed("用户不存在".to_string()))
+            Err(EnterpriseError::AuthenticationFailed(
+                "用户不存在".to_string(),
+            ))
         }
     }
 
     /// 撤销用户的API密钥
     pub fn revoke_api_key_for_user(&self, user_id: &str, api_key: &str) -> EnterpriseResult<bool> {
         let mut users = self.users.write();
-        
+
         if let Some(user) = users.get_mut(user_id) {
             let result = user.revoke_api_key(api_key);
-            
+
             if result {
                 self.log_audit_event(
                     Some(user_id.to_string()),
@@ -710,10 +761,12 @@ impl AuthenticationManager {
                     None,
                 );
             }
-            
+
             Ok(result)
         } else {
-            Err(EnterpriseError::AuthenticationFailed("用户不存在".to_string()))
+            Err(EnterpriseError::AuthenticationFailed(
+                "用户不存在".to_string(),
+            ))
         }
     }
 }
@@ -872,7 +925,7 @@ mod tests {
     #[test]
     fn test_api_key_generation() {
         let api_key = ApiKey::new("test_key".to_string(), Some(Duration::from_secs(3600)));
-        
+
         assert!(api_key.key.starts_with("gvdb_"));
         assert!(api_key.is_valid());
         assert_eq!(api_key.name, "test_key");
@@ -881,11 +934,10 @@ mod tests {
     #[test]
     fn test_authentication_manager() {
         let auth_manager = AuthenticationManager::new();
-        
-        let user_id = auth_manager.create_admin_user(
-            "admin".to_string(),
-            "password123".to_string()
-        ).unwrap();
+
+        let user_id = auth_manager
+            .create_admin_user("admin".to_string(), "password123".to_string())
+            .unwrap();
 
         let user = auth_manager.get_user(&user_id).unwrap();
         assert_eq!(user.username, "admin");
