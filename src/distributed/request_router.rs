@@ -411,7 +411,7 @@ impl ClusterAwareRequestRouter {
                     avg_response_time_ms: weight.avg_response_time_ms,
                     current_connections: weight.current_connections,
                     weight: weight.weight,
-                    last_updated: weight.last_updated,
+                    last_updated_timestamp: weight.last_updated.elapsed().as_secs() as i64,
                 }
             }).collect(),
         }
@@ -515,9 +515,8 @@ pub struct NodeHealthDetail {
     pub current_connections: u32,
     /// 权重
     pub weight: f64,
-    /// 最后更新时间
-    #[serde(skip)]
-    pub last_updated: Instant,
+    /// 最后更新时间 (timestamp)
+    pub last_updated_timestamp: i64,
 }
 
 /// 负载均衡状态
