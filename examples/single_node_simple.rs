@@ -3,9 +3,9 @@
 //! 这个示例展示了如何创建一个基础的单节点向量数据库服务器。
 
 use grape_vector_db::*;
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use tokio::{signal, time::sleep};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
 /// 简化的服务器配置
 #[derive(Debug, Clone)]
@@ -40,7 +40,9 @@ impl SimpleVectorDbServer {
         tokio::fs::create_dir_all(&config.data_dir).await?;
 
         // 初始化数据库
-        let database = VectorDatabase::new(&config.data_dir).await?;
+        let mut db_config = VectorDbConfig::default();
+        db_config.db_path = config.data_dir.clone();
+        let database = VectorDatabase::new(db_config.db_path.clone().into(), db_config).await?;
 
         Ok(Self {
             config,
@@ -69,7 +71,7 @@ impl SimpleVectorDbServer {
         // 优雅关闭
         info!("开始优雅关闭...");
         server_handle.abort();
-        self.database.save().await?;
+        // 删除save方法调用，因为数据库会自动持久化
         info!("服务器已关闭");
 
         Ok(())
@@ -88,10 +90,13 @@ impl SimpleVectorDbServer {
                 package_name: Some("grape-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("documentation".to_string()),
+                vector: None,
                 metadata: [
                     ("category".to_string(), "技术文档".to_string()),
                     ("tags".to_string(), "数据库,向量搜索".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
             Document {
                 id: "server_doc_2".to_string(),
@@ -101,10 +106,13 @@ impl SimpleVectorDbServer {
                 package_name: Some("api-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("guide".to_string()),
+                vector: None,
                 metadata: [
                     ("category".to_string(), "API文档".to_string()),
                     ("tags".to_string(), "REST,HTTP,API".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
             Document {
                 id: "server_doc_3".to_string(),
@@ -114,10 +122,13 @@ impl SimpleVectorDbServer {
                 package_name: Some("deployment-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("guide".to_string()),
+                vector: None,
                 metadata: [
                     ("category".to_string(), "部署文档".to_string()),
                     ("tags".to_string(), "部署,单节点".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
         ];
 
@@ -125,7 +136,7 @@ impl SimpleVectorDbServer {
             self.database.add_document(doc).await?;
         }
 
-        let stats = self.database.stats();
+        let stats = self.database.get_stats().await;
         info!("示例数据加载完成: {} 个文档", stats.document_count);
 
         Ok(())
@@ -183,7 +194,8 @@ async fn run_client_demo() -> Result<(), Box<dyn std::error::Error>> {
     info!("🎯 运行客户端演示...");
 
     // 创建一个临时数据库来模拟客户端操作
-    let mut client_db = VectorDatabase::new("./client_demo_data").await?;
+    let client_config = VectorDbConfig::default();
+    let client_db = VectorDatabase::new("./client_demo_data".into(), client_config).await?;
 
     // 模拟客户端添加数据
     let client_docs = vec![
@@ -195,7 +207,10 @@ async fn run_client_demo() -> Result<(), Box<dyn std::error::Error>> {
             package_name: Some("client-demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("example".to_string()),
+            vector: None,
             metadata: [("source".to_string(), "client".to_string())].into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         },
         Document {
             id: "client_doc_2".to_string(),
@@ -205,19 +220,24 @@ async fn run_client_demo() -> Result<(), Box<dyn std::error::Error>> {
             package_name: Some("client-demo".to_string()),
             version: Some("1.0".to_string()),
             doc_type: Some("example".to_string()),
+            vector: None,
             metadata: [("source".to_string(), "client".to_string())].into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
         },
     ];
 
-    // 添加文档
-    client_db.add_documents(client_docs).await?;
+    // 添加文档 - 使用单个文档添加方法
+    for doc in client_docs {
+        client_db.add_document(doc).await?;
+    }
 
     // 执行搜索
-    let search_results = client_db.search("API通信", 5).await?;
+    let search_results = client_db.text_search("API通信", 5).await?;
     info!("客户端搜索结果: {} 个", search_results.len());
     
     for result in search_results {
-        info!("  - {}: {:.4}", result.title, result.similarity_score);
+        info!("  - {}: {:.4}", result.document.title, result.score);
     }
 
     info!("✅ 客户端演示完成");

@@ -40,11 +40,13 @@
 
 Grape Vector Database 提供三种部署模式，满足不同场景需求：
 
-| 部署模式 | 适用场景 | 文档链接 | 示例代码 |
-|---------|----------|----------|----------|
-| **🔧 内嵌模式** | 桌面应用、移动应用、边缘计算 | [部署指南](./docs/deployment-embedded-mode.md) | [完整示例](./examples/embedded_mode_complete.rs) |
-| **🖥️ 单节点模式** | 微服务、API服务、开发测试 | [部署指南](./docs/deployment-single-node.md) | [服务器示例](./examples/single_node_server.rs) |
-| **🏭 3节点集群** | 生产环境、高可用、大规模服务 | [部署指南](./docs/deployment-cluster-3node.md) | [集群示例](./examples/cluster_3node_complete.rs) |
+| 部署模式 | 适用场景 | 中文文档 | English Docs | 示例代码 |
+|---------|----------|----------|-------------|----------|
+| **🔧 内嵌模式** | 桌面应用、移动应用、边缘计算 | [部署指南](./docs/zh/deployment-embedded-mode.md) | [Deployment Guide](./docs/en/deployment-embedded-mode.md) | [完整示例](./examples/embedded_mode_complete.rs) |
+| **🖥️ 单节点模式** | 微服务、API服务、开发测试 | [部署指南](./docs/zh/deployment-single-node.md) | [Deployment Guide](./docs/en/deployment-single-node.md) | [服务器示例](./examples/single_node_server.rs) |
+| **🏭 3节点集群** | 生产环境、高可用、大规模服务 | [部署指南](./docs/zh/deployment-cluster-3node.md) | [Deployment Guide](./docs/en/deployment-cluster-3node.md) | [集群示例](./examples/cluster_3node_complete.rs) |
+
+> 📚 **多语言文档**: 完整的文档提供中文和英文版本，请查看 [docs/README.md](./docs/README.md) 选择您的语言 / Complete documentation available in Chinese and English, see [docs/README.md](./docs/README.md) for language selection
 
 ### 1. 基本用法（Mock提供商）
 

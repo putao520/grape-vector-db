@@ -3,9 +3,9 @@
 //! 这个示例展示了如何模拟一个3节点集群的基本概念和数据分布。
 
 use grape_vector_db::*;
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 use tokio::{signal, time::sleep};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 
 /// 集群节点配置
 #[derive(Debug, Clone)]
@@ -40,7 +40,9 @@ impl ClusterNode {
         tokio::fs::create_dir_all(&config.data_dir).await?;
 
         // 初始化数据库
-        let database = VectorDatabase::new(&config.data_dir).await?;
+        let mut db_config = VectorDbConfig::default();
+        db_config.db_path = config.data_dir.clone();
+        let database = VectorDatabase::new(db_config.db_path.clone().into(), db_config).await?;
 
         let node_status = if config.is_leader {
             NodeStatus::Leader
@@ -95,10 +97,13 @@ impl ClusterNode {
                 package_name: Some("cluster-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("leadership".to_string()),
+                vector: None,
                 metadata: [
                     ("node_type".to_string(), "leader".to_string()),
                     ("shard".to_string(), "0-5".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
             Document {
                 id: "leader_doc_2".to_string(),
@@ -108,14 +113,20 @@ impl ClusterNode {
                 package_name: Some("consensus-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("algorithm".to_string()),
+                vector: None,
                 metadata: [
                     ("node_type".to_string(), "leader".to_string()),
                     ("algorithm".to_string(), "raft".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
         ];
 
-        self.database.add_documents(docs).await?;
+        // 使用单个文档添加方法
+        for doc in docs {
+            self.database.add_document(doc).await?;
+        }
         Ok(())
     }
 
@@ -133,11 +144,14 @@ impl ClusterNode {
                 package_name: Some("shard-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("sharding".to_string()),
+                vector: None,
                 metadata: [
                     ("node_type".to_string(), "follower".to_string()),
                     ("node_id".to_string(), node_id.clone()),
                     ("shard".to_string(), shard_range.to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
             Document {
                 id: format!("{}_doc_2", node_id),
@@ -147,25 +161,31 @@ impl ClusterNode {
                 package_name: Some("replication-docs".to_string()),
                 version: Some("1.0".to_string()),
                 doc_type: Some("replication".to_string()),
+                vector: None,
                 metadata: [
                     ("node_type".to_string(), "follower".to_string()),
                     ("feature".to_string(), "replication".to_string()),
                 ].into(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
             },
         ];
 
-        self.database.add_documents(docs).await?;
+        // 使用单个文档添加方法
+        for doc in docs {
+            self.database.add_document(doc).await?;
+        }
         Ok(())
     }
 
     /// 获取节点统计信息
-    pub fn get_stats(&self) -> DatabaseStats {
-        self.database.stats()
+    pub async fn get_stats(&self) -> DatabaseStats {
+        self.database.get_stats().await
     }
 
     /// 搜索数据
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        self.database.search(query, limit).await
+        Ok(self.database.text_search(query, limit).await?)
     }
 }
 
@@ -230,10 +250,10 @@ impl SimpleCluster {
         info!("🔍 验证集群健康状态");
 
         for node in &self.nodes {
-            let stats = node.get_stats();
+            let stats = node.get_stats().await;
             info!("节点 {} 状态:", node.config.node_id);
             info!("  文档数量: {}", stats.document_count);
-            info!("  向量数量: {}", stats.vector_count);
+            info!("  密集向量数量: {}", stats.dense_vector_count);
             info!("  状态: {:?}", node.node_status);
         }
 
@@ -265,7 +285,7 @@ impl SimpleCluster {
             // 显示合并后的结果
             info!("总共找到 {} 个结果:", all_results.len());
             for (node_id, result) in all_results.iter().take(5) {
-                info!("  [{}] {}: {:.4}", node_id, result.title, result.similarity_score);
+                info!("  [{}] {}: {:.4}", node_id, result.document.title, result.score);
             }
         }
 
@@ -308,8 +328,8 @@ impl SimpleCluster {
         info!("🛑 关闭集群");
 
         for node in &mut self.nodes {
-            info!("保存节点 {} 的数据", node.config.node_id);
-            node.database.save().await?;
+            info!("节点 {} 准备关闭", node.config.node_id);
+            // 删除save方法调用，因为数据库会自动持久化
         }
 
         info!("✅ 集群已关闭");

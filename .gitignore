@@ -5,3 +5,5 @@
 performance_test_data/
 concurrent_test_data/
 storage_test_data/
+*_data/
+temp_demo_db/
