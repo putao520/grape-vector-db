@@ -109,6 +109,7 @@ pub struct User {
     pub email: Option<String>,
     pub roles: Vec<Role>,
     pub api_keys: Vec<ApiKey>,
+    pub password_hash: Option<String>, // 添加密码哈希字段
     pub created_at: SystemTime,
     pub last_login: Option<SystemTime>,
     pub is_active: bool,
@@ -325,15 +326,31 @@ impl AuthenticationManager {
         }
     }
 
+    /// 生成密码哈希
+    fn hash_password(password: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(password.as_bytes());
+        hasher.update(b"grape_vector_db_salt"); // 简单的盐值，实际应用中应使用随机盐
+        hex::encode(hasher.finalize())
+    }
+
+    /// 验证密码
+    fn verify_password(password: &str, hash: &str) -> bool {
+        Self::hash_password(password) == hash
+    }
+
     /// 创建默认管理员用户
-    pub fn create_admin_user(&self, username: String, _password: String) -> EnterpriseResult<String> {
+    pub fn create_admin_user(&self, username: String, password: String) -> EnterpriseResult<String> {
         let user_id = Uuid::new_v4().to_string();
+        let password_hash = Self::hash_password(&password);
+        
         let user = User {
             id: user_id.clone(),
             username: username.clone(),
             email: None,
             roles: vec![Role::SuperAdmin],
             api_keys: vec![],
+            password_hash: Some(password_hash),
             created_at: SystemTime::now(),
             last_login: None,
             is_active: true,
@@ -359,12 +376,16 @@ impl AuthenticationManager {
     /// 创建用户
     pub fn create_user(&self, username: String, email: Option<String>, roles: Vec<Role>) -> EnterpriseResult<String> {
         let user_id = Uuid::new_v4().to_string();
+        // 为普通用户设置默认密码 "password123"
+        let password_hash = Self::hash_password("password123");
+        
         let user = User {
             id: user_id.clone(),
             username: username.clone(),
             email,
             roles,
             api_keys: vec![],
+            password_hash: Some(password_hash),
             created_at: SystemTime::now(),
             last_login: None,
             is_active: true,
@@ -394,30 +415,33 @@ impl AuthenticationManager {
     }
 
     /// 通过用户名和密码进行身份验证
-    pub fn authenticate_user(&self, username: &str, _password: &str) -> EnterpriseResult<User> {
+    pub fn authenticate_user(&self, username: &str, password: &str) -> EnterpriseResult<User> {
         // 检查登录尝试限制
         self.check_login_attempts(username)?;
 
         let users = self.users.read();
         
         if let Some(user) = users.values().find(|u| u.username == username) {
-            // 在实际应用中，应该使用加密的密码比较
-            // 这里简化为直接比较，但应该使用bcrypt或类似的安全哈希
             if user.is_active {
-                // 模拟密码验证成功
-                self.clear_login_attempts(username);
-                
-                self.log_audit_event(
-                    Some(user.id.clone()),
-                    "USER_LOGIN".to_string(),
-                    "authentication".to_string(),
-                    HashMap::new(),
-                    AuditResult::Success,
-                    None,
-                    None,
-                );
-                
-                return Ok(user.clone());
+                // 验证密码
+                if let Some(ref stored_hash) = user.password_hash {
+                    if Self::verify_password(password, stored_hash) {
+                        // 密码正确
+                        self.clear_login_attempts(username);
+                        
+                        self.log_audit_event(
+                            Some(user.id.clone()),
+                            "USER_LOGIN".to_string(),
+                            "authentication".to_string(),
+                            HashMap::new(),
+                            AuditResult::Success,
+                            None,
+                            None,
+                        );
+                        
+                        return Ok(user.clone());
+                    }
+                }
             }
         }
 
@@ -439,11 +463,14 @@ impl AuthenticationManager {
 
     /// 验证API密钥
     pub fn authenticate_api_key(&self, api_key: &str) -> EnterpriseResult<User> {
-        let users = self.users.read();
+        let mut users = self.users.write(); // 需要写锁来更新最后使用时间
         
-        for user in users.values() {
-            for key in &user.api_keys {
+        for user in users.values_mut() {
+            for key in &mut user.api_keys {
                 if key.key == api_key && key.is_valid() {
+                    // 更新最后使用时间
+                    key.mark_used();
+                    
                     self.log_audit_event(
                         Some(user.id.clone()),
                         "API_KEY_AUTH".to_string(),
@@ -641,6 +668,54 @@ impl AuthenticationManager {
         let policy = self.security_policy.read();
         policy.clone()
     }
+
+    /// 为用户创建API密钥
+    pub fn create_api_key_for_user(&self, user_id: &str, name: String, expires_in: Option<Duration>) -> EnterpriseResult<String> {
+        let mut users = self.users.write();
+        
+        if let Some(user) = users.get_mut(user_id) {
+            let api_key = user.create_api_key(name.clone(), expires_in);
+            
+            self.log_audit_event(
+                Some(user_id.to_string()),
+                "CREATE_API_KEY".to_string(),
+                format!("api_key:{}", name),
+                HashMap::new(),
+                AuditResult::Success,
+                None,
+                None,
+            );
+            
+            Ok(api_key)
+        } else {
+            Err(EnterpriseError::AuthenticationFailed("用户不存在".to_string()))
+        }
+    }
+
+    /// 撤销用户的API密钥
+    pub fn revoke_api_key_for_user(&self, user_id: &str, api_key: &str) -> EnterpriseResult<bool> {
+        let mut users = self.users.write();
+        
+        if let Some(user) = users.get_mut(user_id) {
+            let result = user.revoke_api_key(api_key);
+            
+            if result {
+                self.log_audit_event(
+                    Some(user_id.to_string()),
+                    "REVOKE_API_KEY".to_string(),
+                    format!("api_key:{}", api_key),
+                    HashMap::new(),
+                    AuditResult::Success,
+                    None,
+                    None,
+                );
+            }
+            
+            Ok(result)
+        } else {
+            Err(EnterpriseError::AuthenticationFailed("用户不存在".to_string()))
+        }
+    }
 }
 
 impl Default for AuthenticationManager {
@@ -826,6 +901,7 @@ mod tests {
             email: None,
             roles: vec![Role::ReadOnlyUser],
             api_keys: vec![],
+            password_hash: Some("test_hash".to_string()),
             created_at: SystemTime::now(),
             last_login: None,
             is_active: true,

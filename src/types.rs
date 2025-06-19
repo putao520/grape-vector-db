@@ -902,6 +902,9 @@ pub enum VectorDbError {
     #[error("嵌入错误: {0}")]
     EmbeddingError(String),
 
+    #[error("验证错误: {0}")]
+    ValidationError(String),
+
     #[error("其他错误: {0}")]
     Other(String),
 }

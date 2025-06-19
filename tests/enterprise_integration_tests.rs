@@ -57,20 +57,18 @@ mod enterprise_tests {
         ).unwrap();
 
         // 为管理员用户创建API密钥
-        let admin_user = auth_manager.get_user(&admin_user_id).unwrap();
-        let mut admin_user_mut = admin_user.clone();
-        let admin_api_key = admin_user_mut.create_api_key(
+        let admin_api_key = auth_manager.create_api_key_for_user(
+            &admin_user_id,
             "admin_key".to_string(),
             Some(Duration::from_secs(3600)),
-        );
+        ).unwrap();
 
         // 为普通用户创建API密钥
-        let user = auth_manager.get_user(&user_id).unwrap();
-        let mut user_mut = user.clone();
-        let user_api_key = user_mut.create_api_key(
+        let user_api_key = auth_manager.create_api_key_for_user(
+            &user_id,
             "user_key".to_string(),
             Some(Duration::from_secs(3600)),
-        );
+        ).unwrap();
 
         // 测试文档操作权限
         let test_doc = Document {
@@ -237,13 +235,12 @@ mod enterprise_tests {
             vec![Role::DataManager],
         ).unwrap();
 
-        // 获取用户并创建API密钥
-        let user = auth_manager.get_user(&user_id).unwrap();
-        let mut user_mut = user.clone();
-        let api_key = user_mut.create_api_key(
+        // 创建API密钥
+        let api_key = auth_manager.create_api_key_for_user(
+            &user_id,
             "test_api_key".to_string(),
             Some(Duration::from_secs(3600)),
-        );
+        ).unwrap();
 
         assert!(api_key.starts_with("gvdb_"), "API密钥应该有正确的前缀");
 
@@ -256,7 +253,7 @@ mod enterprise_tests {
         assert!(authenticated_user.has_permission(&Permission::WriteData));
 
         // 撤销API密钥
-        let revoke_result = user_mut.revoke_api_key(&api_key);
+        let revoke_result = auth_manager.revoke_api_key_for_user(&user_id, &api_key).unwrap();
         assert!(revoke_result, "API密钥撤销应该成功");
 
         // 撤销后的验证应该失败

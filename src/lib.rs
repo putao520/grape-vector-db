@@ -326,19 +326,21 @@ impl VectorDatabase {
             return Ok(Vec::new());
         }
 
+        // 验证文档ID
+        for document in &documents {
+            if document.id.is_empty() {
+                return Err(VectorDbError::ValidationError("文档ID不能为空".to_string()));
+            }
+        }
+
         // 预先收集需要索引的向量，避免后续查询
         // 使用预分配的容量来减少重新分配
         let mut vectors_to_index = Vec::with_capacity(documents.len());
         
         for document in &documents {
             if let Some(ref vector) = document.vector {
-                let id = if document.id.is_empty() {
-                    uuid::Uuid::new_v4().to_string()
-                } else {
-                    // 避免不必要的克隆，直接引用字符串内容
-                    document.id.to_owned()
-                };
-                vectors_to_index.push((id, vector.clone()));
+                // 文档ID已经验证过非空，直接使用
+                vectors_to_index.push((document.id.clone(), vector.clone()));
             }
         }
 
@@ -706,11 +708,21 @@ impl VectorDatabase {
     pub async fn add_document_enterprise(
         &self,
         document: Document,
-        user_id: Option<String>,
+        api_key_or_user_id: Option<String>,
     ) -> Result<String, VectorDbError> {
-        // 如果有用户ID，进行权限检查
-        if let (Some(user_id), Some(auth_manager)) = (&user_id, &self.auth_manager) {
-            auth_manager.check_permission(user_id, &Permission::WriteData)
+        // 如果有API密钥或用户ID，进行权限检查
+        if let (Some(key_or_id), Some(auth_manager)) = (&api_key_or_user_id, &self.auth_manager) {
+            let user_id = if key_or_id.starts_with("gvdb_") {
+                // 这是一个API密钥，需要验证并获取用户ID
+                let user = auth_manager.authenticate_api_key(key_or_id)
+                    .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
+                user.id
+            } else {
+                // 这是一个用户ID
+                key_or_id.clone()
+            };
+
+            auth_manager.check_permission(&user_id, &Permission::WriteData)
                 .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
         }
 
@@ -730,11 +742,21 @@ impl VectorDatabase {
         &self,
         query: &str,
         limit: usize,
-        user_id: Option<String>,
+        api_key_or_user_id: Option<String>,
     ) -> Result<Vec<SearchResult>, VectorDbError> {
-        // 如果有用户ID，进行权限检查
-        if let (Some(user_id), Some(auth_manager)) = (&user_id, &self.auth_manager) {
-            auth_manager.check_permission(user_id, &Permission::ReadData)
+        // 如果有API密钥或用户ID，进行权限检查
+        if let (Some(key_or_id), Some(auth_manager)) = (&api_key_or_user_id, &self.auth_manager) {
+            let user_id = if key_or_id.starts_with("gvdb_") {
+                // 这是一个API密钥，需要验证并获取用户ID
+                let user = auth_manager.authenticate_api_key(key_or_id)
+                    .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
+                user.id
+            } else {
+                // 这是一个用户ID
+                key_or_id.clone()
+            };
+
+            auth_manager.check_permission(&user_id, &Permission::ReadData)
                 .map_err(|e| VectorDbError::AuthError(e.to_string()))?;
         }
 
