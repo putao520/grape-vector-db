@@ -9,6 +9,7 @@ use chrono::Utc;
 
 use crate::advanced_storage::AdvancedStorage;
 use crate::types::*;
+use crate::HealthStatus;
 use crate::distributed::replication::ReplicationManager;
 use crate::distributed::network_client::{DistributedNetworkClient, NetworkError};
 

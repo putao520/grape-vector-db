@@ -120,9 +120,8 @@ pub mod advanced_storage;
 pub mod benchmark;
 pub mod concurrent;
 pub mod config;
-// Distributed module temporarily disabled due to type resolution issues
-// All TODOs have been implemented with enterprise-level functionality
-// pub mod distributed;
+// Distributed module with built-in load balancing
+pub mod distributed;
 pub mod embedded;
 pub mod embeddings;
 pub mod enterprise;

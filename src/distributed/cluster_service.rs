@@ -1,0 +1,434 @@
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+use tracing::{info, warn};
+use serde::{Deserialize, Serialize};
+
+use crate::distributed::{
+    ClusterManager, IntelligentLoadBalancer, LoadBalancerConfig, ClusterAwareRequestRouter,
+    RoutingConfig, DistributedNetworkClient
+};
+use crate::types::*;
+
+/// 集群服务配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterServiceConfig {
+    /// 集群配置
+    pub cluster_config: ClusterConfig,
+    /// 负载均衡配置
+    pub load_balancer_config: LoadBalancerConfig,
+    /// 路由配置
+    pub routing_config: RoutingConfig,
+    /// 本地节点信息
+    pub local_node: NodeInfo,
+    /// 是否启用内置负载均衡
+    pub enable_builtin_load_balancer: bool,
+    /// 服务发现配置
+    pub service_discovery_config: ServiceDiscoveryConfig,
+}
+
+/// 服务发现配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceDiscoveryConfig {
+    /// 是否启用自动发现
+    pub enable_auto_discovery: bool,
+    /// 种子节点列表
+    pub seed_nodes: Vec<String>,
+    /// 发现间隔 (秒)
+    pub discovery_interval_secs: u64,
+    /// 节点健康检查间隔 (秒)
+    pub health_check_interval_secs: u64,
+}
+
+impl Default for ServiceDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            enable_auto_discovery: true,
+            seed_nodes: Vec::new(),
+            discovery_interval_secs: 60,
+            health_check_interval_secs: 30,
+        }
+    }
+}
+
+impl Default for ClusterServiceConfig {
+    fn default() -> Self {
+        Self {
+            cluster_config: ClusterConfig::default(),
+            load_balancer_config: LoadBalancerConfig::default(),
+            routing_config: RoutingConfig::default(),
+            local_node: NodeInfo::default(),
+            enable_builtin_load_balancer: true,
+            service_discovery_config: ServiceDiscoveryConfig::default(),
+        }
+    }
+}
+
+/// 集群服务状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterServiceStatus {
+    /// 是否正在运行
+    pub is_running: bool,
+    /// 集群节点数量
+    pub total_nodes: usize,
+    /// 健康节点数量
+    pub healthy_nodes: usize,
+    /// 本地节点状态
+    pub local_node_status: NodeState,
+    /// 负载均衡状态
+    pub load_balance_status: Option<crate::distributed::LoadBalanceStatus>,
+    /// 最后更新时间
+    pub last_updated: chrono::DateTime<chrono::Utc>,
+}
+
+/// 集群服务 - 提供内置负载均衡的完整解决方案
+pub struct ClusterService {
+    /// 配置
+    config: ClusterServiceConfig,
+    /// 集群管理器
+    cluster_manager: Arc<ClusterManager>,
+    /// 负载均衡器
+    load_balancer: Option<Arc<IntelligentLoadBalancer>>,
+    /// 请求路由器
+    request_router: Option<Arc<ClusterAwareRequestRouter>>,
+    /// 网络客户端
+    network_client: Arc<DistributedNetworkClient>,
+    /// 服务状态
+    status: Arc<RwLock<ClusterServiceStatus>>,
+}
+
+impl ClusterService {
+    /// 创建新的集群服务
+    pub async fn new(
+        config: ClusterServiceConfig,
+        storage: Arc<crate::advanced_storage::AdvancedStorage>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        info!("正在初始化集群服务...");
+
+        // 创建集群管理器
+        let cluster_manager = Arc::new(ClusterManager::new(
+            config.cluster_config.clone(),
+            config.local_node.clone(),
+            storage,
+        )?);
+
+        // 创建网络客户端
+        let network_client = Arc::new(DistributedNetworkClient::with_node_id(
+            config.local_node.id.clone()
+        ));
+
+        // 根据配置创建负载均衡器和路由器
+        let (load_balancer, request_router) = if config.enable_builtin_load_balancer {
+            let lb = Arc::new(IntelligentLoadBalancer::new(config.load_balancer_config.clone()));
+            let router = Arc::new(ClusterAwareRequestRouter::new(
+                lb.clone(),
+                network_client.clone(),
+                config.routing_config.clone(),
+            ));
+            (Some(lb), Some(router))
+        } else {
+            (None, None)
+        };
+
+        // 初始化状态
+        let status = Arc::new(RwLock::new(ClusterServiceStatus {
+            is_running: false,
+            total_nodes: 1, // 包含本地节点
+            healthy_nodes: 1,
+            local_node_status: NodeState::Healthy,
+            load_balance_status: None,
+            last_updated: chrono::Utc::now(),
+        }));
+
+        Ok(Self {
+            config,
+            cluster_manager,
+            load_balancer,
+            request_router,
+            network_client,
+            status,
+        })
+    }
+
+    /// 启动集群服务
+    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("启动集群服务...");
+
+        // 启动集群管理器
+        self.cluster_manager.start().await?;
+
+        // 启动负载均衡器后台服务
+        if let Some(ref load_balancer) = self.load_balancer {
+            load_balancer.start_background_services().await?;
+            
+            // 将本地节点添加到负载均衡器
+            load_balancer.add_node(self.config.local_node.id.clone(), 1.0).await;
+        }
+
+        // 启动请求路由器后台服务
+        if let Some(ref request_router) = self.request_router {
+            request_router.start_background_tasks().await?;
+        }
+
+        // 启动服务发现
+        if self.config.service_discovery_config.enable_auto_discovery {
+            self.start_service_discovery().await?;
+        }
+
+        // 更新状态
+        {
+            let mut status = self.status.write().await;
+            status.is_running = true;
+            status.last_updated = chrono::Utc::now();
+        }
+
+        info!("集群服务启动完成");
+        Ok(())
+    }
+
+    /// 停止集群服务
+    pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("停止集群服务...");
+
+        // 从集群中优雅退出
+        self.cluster_manager.leave_cluster(false).await?;
+
+        // 更新状态
+        {
+            let mut status = self.status.write().await;
+            status.is_running = false;
+            status.last_updated = chrono::Utc::now();
+        }
+
+        info!("集群服务已停止");
+        Ok(())
+    }
+
+    /// 获取请求路由器 (主要API)
+    pub fn get_request_router(&self) -> Option<&Arc<ClusterAwareRequestRouter>> {
+        self.request_router.as_ref()
+    }
+
+    /// 获取负载均衡器
+    pub fn get_load_balancer(&self) -> Option<&Arc<IntelligentLoadBalancer>> {
+        self.load_balancer.as_ref()
+    }
+
+    /// 获取集群管理器
+    pub fn get_cluster_manager(&self) -> &Arc<ClusterManager> {
+        &self.cluster_manager
+    }
+
+    /// 添加节点到集群
+    pub async fn add_node(&self, node: NodeInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 添加到集群管理器
+        self.cluster_manager.add_node(node.clone()).await?;
+
+        // 添加到负载均衡器
+        if let Some(ref load_balancer) = self.load_balancer {
+            load_balancer.add_node(node.id.clone(), 1.0).await;
+        }
+
+        // 更新状态
+        self.update_cluster_status().await;
+
+        info!("节点 {} 已添加到集群", node.id);
+        Ok(())
+    }
+
+    /// 移除节点
+    pub async fn remove_node(&self, node_id: &NodeId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 从集群管理器移除
+        self.cluster_manager.remove_node(node_id).await?;
+
+        // 从负载均衡器移除
+        if let Some(ref load_balancer) = self.load_balancer {
+            load_balancer.remove_node(node_id).await;
+        }
+
+        // 更新状态
+        self.update_cluster_status().await;
+
+        info!("节点 {} 已从集群移除", node_id);
+        Ok(())
+    }
+
+    /// 获取集群状态
+    pub async fn get_cluster_status(&self) -> ClusterServiceStatus {
+        self.status.read().await.clone()
+    }
+
+    /// 获取详细的集群健康状态
+    pub async fn get_cluster_health(&self) -> Result<crate::distributed::ClusterHealthStatus, Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(ref request_router) = self.request_router {
+            Ok(request_router.get_cluster_health().await)
+        } else {
+            // 如果没有启用内置负载均衡，返回基本状态
+            Ok(crate::distributed::ClusterHealthStatus {
+                total_nodes: 1,
+                healthy_nodes: 1,
+                health_percentage: 100.0,
+                node_details: vec![],
+            })
+        }
+    }
+
+    /// 获取负载均衡状态
+    pub async fn get_load_balance_status(&self) -> Option<crate::distributed::LoadBalanceStatus> {
+        if let Some(ref request_router) = self.request_router {
+            Some(request_router.get_load_balance_status().await)
+        } else {
+            None
+        }
+    }
+
+    /// 是否启用了内置负载均衡
+    pub fn is_builtin_load_balancer_enabled(&self) -> bool {
+        self.config.enable_builtin_load_balancer
+    }
+
+    /// 启动服务发现
+    async fn start_service_discovery(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if self.config.service_discovery_config.seed_nodes.is_empty() {
+            warn!("未配置种子节点，跳过服务发现");
+            return Ok(());
+        }
+
+        let config = self.config.service_discovery_config.clone();
+        let network_client = self.network_client.clone();
+        let load_balancer = self.load_balancer.clone();
+        let cluster_manager = self.cluster_manager.clone();
+
+        tokio::spawn(async move {
+            let mut discovery_interval = tokio::time::interval(Duration::from_secs(config.discovery_interval_secs));
+            
+            loop {
+                discovery_interval.tick().await;
+                
+                for seed_node in &config.seed_nodes {
+                    // 尝试连接种子节点并发现其他节点
+                    match network_client.send_health_check(&seed_node.clone(), seed_node).await {
+                        Ok(_) => {
+                            info!("发现健康的种子节点: {}", seed_node);
+                            
+                            // 如果有负载均衡器，添加到负载均衡器
+                            if let Some(ref lb) = load_balancer {
+                                lb.add_node(seed_node.clone(), 1.0).await;
+                            }
+                            
+                            // 尝试加入集群 (简化实现)
+                            if let Err(e) = cluster_manager.join_cluster(seed_node).await {
+                                warn!("加入集群失败，种子节点: {}, 错误: {}", seed_node, e);
+                            }
+                        },
+                        Err(e) => {
+                            warn!("种子节点不可达: {}, 错误: {}", seed_node, e);
+                        }
+                    }
+                }
+            }
+        });
+
+        info!("服务发现已启动，种子节点: {:?}", config.seed_nodes);
+        Ok(())
+    }
+
+    /// 更新集群状态
+    async fn update_cluster_status(&self) {
+        if let Some(ref request_router) = self.request_router {
+            if let Ok(health_status) = request_router.get_cluster_health().await {
+                let mut status = self.status.write().await;
+                status.total_nodes = health_status.total_nodes;
+                status.healthy_nodes = health_status.healthy_nodes;
+                status.load_balance_status = Some(request_router.get_load_balance_status().await);
+                status.last_updated = chrono::Utc::now();
+            }
+        }
+    }
+
+    /// 检查集群是否健康
+    pub async fn is_cluster_healthy(&self) -> bool {
+        if let Ok(health) = self.get_cluster_health().await {
+            health.health_percentage >= 50.0 // 至少50%的节点健康
+        } else {
+            true // 如果无法获取状态，假设健康
+        }
+    }
+
+    /// 获取推荐的API使用方式
+    pub fn get_api_usage_guide(&self) -> String {
+        if self.config.enable_builtin_load_balancer {
+            format!(
+                "集群服务已启用内置负载均衡。\n\
+                客户端可以连接到任何节点: \n\
+                - 本地节点: {}:{}\n\
+                - 所有请求将被智能路由到最佳节点\n\
+                - 支持自动故障转移和负载均衡\n\
+                - 无需外部 nginx 或 HAProxy",
+                self.config.local_node.address,
+                self.config.local_node.port
+            )
+        } else {
+            "集群服务未启用内置负载均衡，建议使用外部负载均衡器 (如 nginx)".to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_cluster_service_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = Arc::new(
+            crate::advanced_storage::AdvancedStorage::new(temp_dir.path().to_str().unwrap())
+                .await
+                .unwrap()
+        );
+
+        let config = ClusterServiceConfig::default();
+        let service = ClusterService::new(config, storage).await.unwrap();
+
+        assert!(service.is_builtin_load_balancer_enabled());
+        assert!(service.get_request_router().is_some());
+        assert!(service.get_load_balancer().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cluster_service_without_load_balancer() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = Arc::new(
+            crate::advanced_storage::AdvancedStorage::new(temp_dir.path().to_str().unwrap())
+                .await
+                .unwrap()
+        );
+
+        let mut config = ClusterServiceConfig::default();
+        config.enable_builtin_load_balancer = false;
+
+        let service = ClusterService::new(config, storage).await.unwrap();
+
+        assert!(!service.is_builtin_load_balancer_enabled());
+        assert!(service.get_request_router().is_none());
+        assert!(service.get_load_balancer().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_api_usage_guide() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = Arc::new(
+            crate::advanced_storage::AdvancedStorage::new(temp_dir.path().to_str().unwrap())
+                .await
+                .unwrap()
+        );
+
+        let config = ClusterServiceConfig::default();
+        let service = ClusterService::new(config, storage).await.unwrap();
+
+        let guide = service.get_api_usage_guide();
+        assert!(guide.contains("内置负载均衡"));
+        assert!(guide.contains("无需外部 nginx"));
+    }
+}

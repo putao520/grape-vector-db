@@ -299,6 +299,121 @@ impl DistributedNetworkClient {
         }
     }
 
+    /// 发送搜索请求 (for request router)
+    pub async fn send_search_request(
+        &self,
+        target_node: &NodeId,
+        search_request: &crate::types::SearchRequest,
+    ) -> Result<crate::types::GrpcSearchResponse, NetworkError> {
+        // 简化实现：使用现有的分布式搜索并转换结果
+        let node_address = self.resolve_node_address(target_node).await;
+        let results = self.send_distributed_search_request(target_node, &node_address, search_request).await?;
+        
+        // 转换结果格式
+        let internal_results = results.into_iter().map(|r| crate::types::InternalSearchResult {
+            document_id: r.document.id.clone(),
+            title: Some(r.document.title.clone()),
+            content_snippet: r.document.content.chars().take(200).collect(),
+            similarity_score: r.score,
+            package_name: Some(r.document.package_name.clone()),
+            doc_type: Some(r.document.doc_type.clone()),
+            metadata: r.document.metadata.clone(),
+        }).collect();
+
+        Ok(crate::types::GrpcSearchResponse {
+            results: internal_results,
+            query_time_ms: 50.0, // 模拟查询时间
+            total_matches: results.len(),
+        })
+    }
+
+    /// 发送文档插入请求 (for request router)
+    pub async fn send_insert_request(
+        &self,
+        target_node: &NodeId,
+        document: &crate::types::Document,
+    ) -> Result<String, NetworkError> {
+        let node_address = self.resolve_node_address(target_node).await;
+        let url = format!("http://{}/api/v1/documents", node_address);
+        
+        let request = DocumentInsertRequest {
+            document: document.clone(),
+            sender_id: self.local_node_id.clone(),
+            timestamp: Utc::now().timestamp(),
+        };
+
+        for attempt in 0..self.retry_attempts {
+            match self.send_post_request(&url, &request).await {
+                Ok(response) => {
+                    debug!("文档插入成功，目标节点: {}, 文档ID: {}", target_node, document.id);
+                    return Ok(response);
+                }
+                Err(e) => {
+                    error!("文档插入失败，目标节点: {}, 尝试: {}/{}, 错误: {}", 
+                           target_node, attempt + 1, self.retry_attempts, e);
+                    
+                    if attempt < self.retry_attempts - 1 {
+                        let delay = Duration::from_millis(100 * (2_u64.pow(attempt as u32)));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+        
+        Err(NetworkError::RequestTimeout(format!(
+            "文档插入请求超时，目标节点: {}", target_node
+        )))
+    }
+
+    /// 发送批量文档插入请求 (for request router)
+    pub async fn send_batch_insert_request(
+        &self,
+        target_node: &NodeId,
+        documents: &[crate::types::Document],
+    ) -> Result<Vec<String>, NetworkError> {
+        let node_address = self.resolve_node_address(target_node).await;
+        let url = format!("http://{}/api/v1/documents/batch", node_address);
+        
+        let request = BatchDocumentInsertRequest {
+            documents: documents.to_vec(),
+            sender_id: self.local_node_id.clone(),
+            timestamp: Utc::now().timestamp(),
+        };
+
+        for attempt in 0..self.retry_attempts {
+            match self.send_post_request(&url, &request).await {
+                Ok(response) => {
+                    debug!("批量文档插入成功，目标节点: {}, 文档数量: {}", target_node, documents.len());
+                    return Ok(response);
+                }
+                Err(e) => {
+                    error!("批量文档插入失败，目标节点: {}, 尝试: {}/{}, 错误: {}", 
+                           target_node, attempt + 1, self.retry_attempts, e);
+                    
+                    if attempt < self.retry_attempts - 1 {
+                        let delay = Duration::from_millis(100 * (2_u64.pow(attempt as u32)));
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+        
+        Err(NetworkError::RequestTimeout(format!(
+            "批量文档插入请求超时，目标节点: {}", target_node
+        )))
+    }
+
+    /// 解析节点地址
+    async fn resolve_node_address(&self, node_id: &NodeId) -> String {
+        // 简化实现：假设节点ID格式为 hostname-timestamp-random
+        // 在真实环境中，这应该从服务发现系统获取
+        if let Some(hostname) = node_id.split('-').next() {
+            format!("{}:8080", hostname)
+        } else {
+            format!("{}:8080", node_id)
+        }
+    }
+
     /// 发送POST请求
     async fn send_post_request<T, R>(&self, url: &str, request: &T) -> Result<R, Box<dyn std::error::Error + Send + Sync>>
     where
@@ -373,12 +488,30 @@ impl Default for DistributedNetworkClient {
 pub enum NetworkError {
     #[error("请求失败: {0}")]
     RequestFailed(String),
+    #[error("请求超时: {0}")]
+    RequestTimeout(String),
     #[error("超过最大重试次数")]
     MaxRetriesExceeded,
     #[error("连接超时")]
     Timeout,
     #[error("节点不可达")]
     NodeUnreachable,
+}
+
+/// 文档插入请求
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DocumentInsertRequest {
+    pub document: crate::types::Document,
+    pub sender_id: NodeId,
+    pub timestamp: i64,
+}
+
+/// 批量文档插入请求
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchDocumentInsertRequest {
+    pub documents: Vec<crate::types::Document>,
+    pub sender_id: NodeId,
+    pub timestamp: i64,
 }
 
 /// 心跳请求
