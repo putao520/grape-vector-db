@@ -8,9 +8,9 @@
 
 use crate::{
     types::{
-        SparseVector, DocumentSparseRepresentation, BM25Stats, ScoreBreakdown
+        SparseVector, DocumentSparseRepresentation, BM25Stats
     },
-    errors::{Result, VectorDbError},
+    errors::Result,
 };
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};

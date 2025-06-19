@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::{RwLock, Mutex};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

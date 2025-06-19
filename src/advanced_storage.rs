@@ -3,7 +3,6 @@
 
 use crate::errors::{Result, VectorDbError};
 use crate::types::Point;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sled::{
     transaction::{TransactionResult, Transactional},
@@ -754,7 +753,7 @@ impl crate::storage::VectorStore for AdvancedStorage {
         Ok(true)
     }
 
-    async fn vector_search(&self, query_vector: &[f32], limit: usize, threshold: Option<f32>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
+    async fn vector_search(&self, _query_vector: &[f32], _limit: usize, _threshold: Option<f32>) -> crate::errors::Result<Vec<crate::types::SearchResult>> {
         // AdvancedStorage doesn't implement vector search directly
         // This should be handled by the index layer
         Err(crate::types::VectorDbError::NotImplemented("Vector search not implemented in AdvancedStorage, use index layer".into()))
@@ -784,7 +783,7 @@ impl crate::storage::VectorStore for AdvancedStorage {
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))
     }
 
-    async fn backup(&self, path: &std::path::Path) -> crate::errors::Result<()> {
+    async fn backup(&self, _path: &std::path::Path) -> crate::errors::Result<()> {
         let backup_id = self.create_backup()
             .map_err(|e| crate::types::VectorDbError::StorageError(e.to_string()))?;
         // The actual backup logic would need to copy the backup to the specified path

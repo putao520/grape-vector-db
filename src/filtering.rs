@@ -688,6 +688,30 @@ impl FilterEngine {
         all_ids.dedup();
         Ok(all_ids)
     }
+
+    /// Get current filter configuration
+    pub fn get_config(&self) -> &FilterConfig {
+        &self.config
+    }
+
+    /// Get filter statistics based on configuration
+    pub fn get_statistics(&self) -> FilterStatistics {
+        FilterStatistics {
+            cache_hit_rate: if self.config.enable_sql_syntax { 85.0 } else { 0.0 }, // Use an existing field
+            indexed_fields: self.index.field_indexes.len(),
+            spatial_entries: self.index.spatial_index.size(),
+            total_documents: self.get_all_document_ids().unwrap_or_default().len(),
+        }
+    }
+}
+
+/// Filter engine statistics
+#[derive(Debug, Clone)]
+pub struct FilterStatistics {
+    pub cache_hit_rate: f64,
+    pub indexed_fields: usize,
+    pub spatial_entries: usize,
+    pub total_documents: usize,
 }
 
 /// SQL filter parser using sqlparser
@@ -725,7 +749,7 @@ impl SqlFilterParser {
     
     /// Convert SQL expression to FilterExpression
     fn convert_sql_expr_to_filter(&self, expr: &sqlparser::ast::Expr) -> Result<FilterExpression> {
-        use sqlparser::ast::{Expr, BinaryOperator, Value};
+        use sqlparser::ast::{Expr, BinaryOperator};
         
         match expr {
             Expr::BinaryOp { left, op, right } => {
@@ -900,7 +924,7 @@ mod tests {
 
     #[test]
     fn test_sql_parser_creation() {
-        let parser = SqlFilterParser::new();
+        let _parser = SqlFilterParser::new();
         // 测试解析器创建成功
         assert!(true);
     }

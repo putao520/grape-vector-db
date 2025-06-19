@@ -84,13 +84,40 @@ impl BinaryQuantizer {
     
     /// Quantize a float vector to binary
     pub fn quantize(&mut self, vector: &[f32]) -> Result<BinaryVector> {
-        let mut binary_vec = BitVec::<u8, bitvec::order::Msb0>::with_capacity(vector.len());
-        
-        for &value in vector {
-            binary_vec.push(value > self.config.threshold);
+        // Generate cache key if caching is enabled
+        if let Some(ref mut cache) = self.cache {
+            let cache_key = format!("{:?}", vector); // In production, use a proper hash
+            
+            // Check cache first
+            if let Some(cached_result) = cache.get(&cache_key) {
+                return Ok(cached_result.clone());
+            }
+            
+            // Compute and cache result
+            let mut binary_vec = BitVec::<u8, bitvec::order::Msb0>::with_capacity(vector.len());
+            
+            for &value in vector {
+                binary_vec.push(value > self.config.threshold);
+            }
+            
+            let result = BinaryVector::new(binary_vec, vector.len());
+            
+            // Store in cache (with size limit to prevent memory growth)
+            if cache.len() < 10000 { // Limit cache size
+                cache.insert(cache_key, result.clone());
+            }
+            
+            Ok(result)
+        } else {
+            // No caching, compute directly
+            let mut binary_vec = BitVec::<u8, bitvec::order::Msb0>::with_capacity(vector.len());
+            
+            for &value in vector {
+                binary_vec.push(value > self.config.threshold);
+            }
+            
+            Ok(BinaryVector::new(binary_vec, vector.len()))
         }
-        
-        Ok(BinaryVector::new(binary_vec, vector.len()))
     }
     
     /// Quantize multiple vectors in batch
@@ -187,6 +214,38 @@ impl BinaryQuantizer {
             dot_product / (norm_a * norm_b)
         }
     }
+
+    /// Clear the quantization cache
+    pub fn clear_cache(&mut self) {
+        if let Some(ref mut cache) = self.cache {
+            cache.clear();
+        }
+    }
+
+    /// Get cache statistics
+    pub fn get_cache_stats(&self) -> CacheStats {
+        if let Some(ref cache) = self.cache {
+            CacheStats {
+                enabled: true,
+                size: cache.len(),
+                capacity: 10000,
+            }
+        } else {
+            CacheStats {
+                enabled: false,
+                size: 0,
+                capacity: 0,
+            }
+        }
+    }
+}
+
+/// Cache statistics
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub enabled: bool,
+    pub size: usize,
+    pub capacity: usize,
 }
 
 /// Performance metrics for binary quantization
@@ -257,6 +316,26 @@ impl BinaryVectorStore {
     /// Check if store is empty
     pub fn is_empty(&self) -> bool {
         self.vectors.is_empty()
+    }
+    
+    /// Get current configuration
+    pub fn get_config(&self) -> &BinaryQuantizationConfig {
+        &self.config
+    }
+    
+    /// Validate vector based on configuration
+    pub fn validate_vector(&self, vector: &BinaryVector) -> Result<()> {
+        if vector.dimension == 0 {
+            return Err(VectorDbError::InvalidVectorDimension);
+        }
+        
+        // Additional validation based on config can be added here
+        if self.config.enable_cache && vector.byte_size() > 1024 * 1024 {
+            tracing::warn!("Large vector detected ({}MB), may impact cache performance", 
+                vector.byte_size() / 1024 / 1024);
+        }
+        
+        Ok(())
     }
     
     /// Calculate total memory usage

@@ -8,16 +8,14 @@
 
 use crate::{
     types::{
-        HybridSearchRequest, FusionStrategy, FusionWeights, 
-        FusionPerformanceStats, QueryMetrics, SearchResult
+        HybridSearchRequest, FusionStrategy, FusionWeights, SearchResult
     },
-    hybrid::{HybridSearchEngine, StatisticalFusionModel},
+    hybrid::HybridSearchEngine,
     storage::VectorStore,
-    errors::{Result, VectorDbError},
+    errors::Result,
 };
-use std::time::{SystemTime, UNIX_EPOCH, Instant, Duration};
+use std::time::Instant;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use serde::{Serialize, Deserialize};
 
 /// 基准测试配置
@@ -182,7 +180,7 @@ impl BenchmarkSuite {
         &self,
         engine: &HybridSearchEngine,
         store: &S,
-        strategy: &FusionStrategy,
+        _strategy: &FusionStrategy,
         strategy_name: &str,
     ) -> Result<BenchmarkResult> {
         let mut latencies = Vec::new();

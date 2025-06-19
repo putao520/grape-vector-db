@@ -8,20 +8,18 @@
 
 use crate::{
     types::{
-        SparseVector, HybridSearchRequest, FusionStrategy, SearchResult, 
+        HybridSearchRequest, FusionStrategy, SearchResult, 
         ScoreBreakdown, DocumentRecord, FusionWeights, FusionPerformanceStats,
         QueryMetrics
     },
     sparse::{SparseIndex, SimpleTokenizer},
     index::{HnswVectorIndex, VectorIndex},
     storage::VectorStore,
-    errors::{Result, VectorDbError},
+    errors::Result,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 use parking_lot::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH, Instant};
-use serde::{Serialize, Deserialize};
 
 /// 学习式融合模型
 pub trait FusionModel: Send + Sync {
@@ -93,7 +91,7 @@ impl StatisticalFusionModel {
 }
 
 impl FusionModel for StatisticalFusionModel {
-    fn predict_weights(&self, query: &str, context: &FusionContext) -> FusionWeights {
+    fn predict_weights(&self, _query: &str, context: &FusionContext) -> FusionWeights {
         let query_type_key = match context.query_type {
             QueryType::Semantic => "semantic",
             QueryType::Keyword => "keyword", 
@@ -213,7 +211,7 @@ impl HybridSearchEngine {
     /// 添加文档到混合索引
     pub async fn add_document<S: VectorStore + ?Sized>(
         &self, 
-        store: &S, 
+        _store: &S, 
         record: &DocumentRecord
     ) -> Result<()> {
         // 添加到密集向量索引
@@ -948,7 +946,6 @@ mod tests {
     use crate::{
         sparse::{SparseIndex, BM25Parameters},
         index::{HnswVectorIndex},
-        config::HnswConfig,
         types::FusionStrategy,
     };
 

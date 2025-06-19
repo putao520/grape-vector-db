@@ -1,8 +1,6 @@
 use crate::types::VectorDbError;
 use instant_distance::{Builder, HnswMap, Point, Search};
 use std::collections::HashMap;
-use std::sync::Arc;
-use parking_lot::{RwLock, Mutex};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 

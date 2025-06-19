@@ -7,7 +7,7 @@ use crate::{
     errors::{Result, VectorDbError}
 };
 use std::sync::Arc;
-use parking_lot::{RwLock, Mutex};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -210,7 +210,7 @@ impl QueryEngine {
             let query_lower = query.to_lowercase();
             let content_lower = content.to_lowercase();
             
-            if let Some(pos) = content_lower.find(&query_lower) {
+            if let Some(_pos) = content_lower.find(&query_lower) {
                 // 使用字符索引而不是字节索引来避免UTF-8边界问题
                 let chars: Vec<char> = content.chars().collect();
                 let content_lower_chars: Vec<char> = content_lower.chars().collect();
@@ -409,7 +409,7 @@ pub struct IndexStats {
 mod tests {
     use super::*;
     use crate::storage::BasicVectorStore;
-    use std::path::PathBuf;
+    
     use tempfile::TempDir;
 
     #[tokio::test]

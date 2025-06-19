@@ -6,15 +6,37 @@
 /// - 性能优化
 /// - 并发安全
 /// - 资源管理
-mod test_framework;
 
-use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use grape_vector_db::types::*;
 use grape_vector_db::VectorDatabase;
-use test_framework::*;
+
+/// 创建测试文档
+fn create_test_document_with_id(id: &str) -> Document {
+    Document {
+        id: id.to_string(),
+        title: Some(format!("Test Document {}", id)),
+        content: format!("This is test content for document {}", id),
+        language: Some("en".to_string()),
+        version: Some("1".to_string()),
+        doc_type: Some("test".to_string()),
+        package_name: Some("test_package".to_string()),
+        vector: Some(vec![0.1, 0.2, 0.3, 0.4, 0.5]), // Simple test vector
+        metadata: HashMap::new(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+/// 生成测试文档集合
+fn generate_test_documents(count: usize) -> Vec<Document> {
+    (0..count)
+        .map(|i| create_test_document_with_id(&format!("doc_{}", i)))
+        .collect()
+}
 
 /// 内嵌模式基础功能测试
 #[cfg(test)]
@@ -622,7 +644,7 @@ mod embedded_concurrency_tests {
         let mut completed = 0;
         for handle in handles {
             match tokio::time::timeout(timeout_duration, handle).await {
-                Ok(Ok(task_id)) => {
+                Ok(Ok(_task_id)) => {
                     completed += 1;
                     if completed % 10 == 0 {
                         println!("已完成 {} 个任务", completed);
