@@ -1453,14 +1453,13 @@ impl RaftNode {
     
     /// 构建集群配置信息
     async fn build_cluster_configuration(&self) -> Vec<NodeId> {
-        let peers = self.config.peers.read().await;
         let mut cluster_config = Vec::new();
         
         // 添加当前节点
         cluster_config.push(self.config.node_id.clone());
         
         // 添加对等节点
-        for peer_id in peers.keys() {
+        for peer_id in &self.config.peers {
             cluster_config.push(peer_id.clone());
         }
         

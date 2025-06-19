@@ -485,7 +485,7 @@ impl ClusterService {
             
             // 检查端口是否有效
             if let Ok(port) = port_str.parse::<u16>() {
-                return port > 0 && port < 65536;
+                return port > 0 && port <= 65535;
             }
         }
         false

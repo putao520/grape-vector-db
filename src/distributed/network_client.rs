@@ -309,6 +309,9 @@ impl DistributedNetworkClient {
         let node_address = self.resolve_node_address(target_node).await;
         let results = self.send_search_request(target_node, &node_address, search_request).await?;
         
+        // 保存长度避免借用检查问题
+        let total_matches = results.len();
+        
         // 转换结果格式
         let internal_results = results.into_iter().map(|r| crate::types::InternalSearchResult {
             document_id: r.document.id.clone(),
@@ -323,7 +326,7 @@ impl DistributedNetworkClient {
         Ok(crate::types::GrpcSearchResponse {
             results: internal_results,
             query_time_ms: 50.0, // 模拟查询时间
-            total_matches: results.len(),
+            total_matches,
         })
     }
 

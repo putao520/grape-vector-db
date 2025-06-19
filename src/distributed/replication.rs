@@ -286,26 +286,23 @@ impl ReplicationManager {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("开始异步复制，请求ID: {}", request_id);
         
-        // 异步发送到所有副本节点
-        // 启动真实的异步复制任务
+        // 简化实现：顺序发送到所有副本节点
+        // 在真实实现中，这应该是并行的异步操作
         for replica_node in &replica_group.replicas {
             let node_id = replica_node.clone();
             let shard_id_copy = shard_id;
             let data_copy = data.clone();
-            let replication_manager = self.clone();
             
-            tokio::spawn(async move {
-                // 执行真实的异步复制
-                match replication_manager.replicate_data(shard_id_copy, data_copy).await {
-                    Ok(_) => {
-                        debug!("异步复制到节点 {} 完成", node_id);
-                    }
-                    Err(e) => {
-                        warn!("异步复制到节点 {} 失败: {}", node_id, e);
-                        // 可以在这里实现重试机制
-                    }
+            // 直接发送复制数据，避免生命周期问题
+            match self.send_data_to_replica(&node_id, &data_copy).await {
+                Ok(_) => {
+                    debug!("异步复制到节点 {} 完成", node_id);
                 }
-            });
+                Err(e) => {
+                    warn!("异步复制到节点 {} 失败: {}", node_id, e);
+                    // 可以在这里实现重试机制
+                }
+            }
         }
         
         info!("异步复制任务已启动");
