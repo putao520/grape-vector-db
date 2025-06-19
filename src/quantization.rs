@@ -47,7 +47,7 @@ impl BinaryVector {
     
     /// Get the number of bytes required to store this binary vector
     pub fn byte_size(&self) -> usize {
-        (self.dimension + 7) / 8
+        self.dimension.div_ceil(8)
     }
     
     /// Convert to raw bytes for storage
@@ -272,6 +272,12 @@ impl QuantizationMetrics {
             compression_ratio: 1.0,
             accuracy: 1.0,
         }
+    }
+}
+
+impl Default for QuantizationMetrics {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -262,11 +262,13 @@ pub fn create_openai_compatible_provider(
     api_key: String,
     model: String,
 ) -> Result<Box<dyn EmbeddingProvider>> {
-    let mut config = EmbeddingConfig::default();
-    config.provider = "openai".to_string();
-    config.endpoint = Some(endpoint);
-    config.api_key = Some(api_key);
-    config.model = model;
+    let config = EmbeddingConfig {
+        provider: "openai".to_string(),
+        endpoint: Some(endpoint),
+        api_key: Some(api_key),
+        model,
+        ..Default::default()
+    };
     
     Ok(Box::new(OpenAICompatibleProvider::new(config)?))
 } 

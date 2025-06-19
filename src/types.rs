@@ -770,7 +770,7 @@ impl Default for ClusterStats {
 }
 
 /// 集群信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterInfo {
     /// 集群配置
     pub config: ClusterConfig,
@@ -786,21 +786,10 @@ pub struct ClusterInfo {
     pub version: u64,
 }
 
-impl Default for ClusterInfo {
-    fn default() -> Self {
-        Self {
-            config: ClusterConfig::default(),
-            nodes: HashMap::new(),
-            leader_id: None,
-            shard_map: ShardMap::default(),
-            stats: ClusterStats::default(),
-            version: 0,
-        }
-    }
-}
+
 
 /// 分片映射
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShardMap {
     /// 分片信息
     pub shards: HashMap<u32, ShardInfo>,
@@ -808,14 +797,7 @@ pub struct ShardMap {
     pub version: u64,
 }
 
-impl Default for ShardMap {
-    fn default() -> Self {
-        Self {
-            shards: HashMap::new(),
-            version: 0,
-        }
-    }
-}
+
 
 /// 心跳消息
 #[derive(Debug, Clone, Serialize, Deserialize)]

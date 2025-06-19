@@ -271,7 +271,6 @@ impl HybridSearchEngine {
         let dense_results = if let Some(dense_vector) = &request.dense_vector {
             let results = self.dense_engine.lock().search(dense_vector, request.limit * 2)?;
             results.into_iter()
-                .map(|(id, score)| (id, score))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -675,6 +674,7 @@ impl HybridSearchEngine {
     }
 
     /// 学习式融合算法
+    #[allow(clippy::too_many_arguments)]
     fn learned_fusion(
         &self,
         dense_results: &[(String, f32)],

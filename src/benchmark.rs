@@ -368,7 +368,7 @@ impl BenchmarkSuite {
 
     /// 生成随机查询
     fn generate_random_query(&self, index: usize) -> String {
-        let queries = vec![
+        let queries = [
             "如何使用向量数据库进行语义搜索",
             "数据库性能优化技巧",
             "机器学习模型训练",
@@ -401,7 +401,7 @@ impl BenchmarkSuite {
         let mut report = String::new();
         
         report.push_str("# 向量数据库混合搜索性能基准测试报告\n\n");
-        report.push_str(&format!("测试配置:\n"));
+        report.push_str("测试配置:\n");
         report.push_str(&format!("- 查询数量: {}\n", self.config.num_queries));
         report.push_str(&format!("- 结果限制: {}\n", self.config.results_limit));
         report.push_str(&format!("- 数据集大小: {}\n", self.config.dataset_size));
@@ -455,7 +455,7 @@ pub fn create_concurrent_benchmark_config(
     concurrency: usize,
 ) -> (Vec<Vec<TestQuery>>, BenchmarkConfig) {
     // 将查询分成批次，返回配置供外部使用
-    let chunk_size = (queries.len() + concurrency - 1) / concurrency;
+    let chunk_size = queries.len().div_ceil(concurrency);
     let chunks: Vec<Vec<TestQuery>> = queries.chunks(chunk_size)
         .map(|chunk| chunk.to_vec())
         .collect();

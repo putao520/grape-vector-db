@@ -3,7 +3,6 @@
 use grape_vector_db::*;
 use std::time::Duration;
 use tempfile::TempDir;
-use tokio;
 
 #[cfg(test)]
 mod enterprise_tests {
@@ -35,7 +34,7 @@ mod enterprise_tests {
         let config = VectorDbConfig::default();
         let enterprise_config = EnterpriseConfig::default();
 
-        let mut db = VectorDatabase::new_enterprise(
+        let db = VectorDatabase::new_enterprise(
             temp_dir.path().to_path_buf(),
             config,
             enterprise_config,
@@ -165,9 +164,8 @@ mod enterprise_tests {
         assert!(health_status.auth_status.is_some());
         assert!(health_status.resilience_status.is_some());
 
-        // 测试企业指标
+        // 测试企业指标 (省略无意义的非负数检查)
         let enterprise_metrics = db.get_enterprise_metrics().await;
-        assert!(enterprise_metrics.database_metrics.document_count >= 0);
         assert!(enterprise_metrics.performance_metrics.average_query_time_ms >= 0.0);
         assert!(enterprise_metrics.auth_metrics.is_some());
         assert!(enterprise_metrics.resilience_metrics.is_some());

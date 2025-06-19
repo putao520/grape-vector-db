@@ -355,7 +355,7 @@ impl MetricsCollector {
             ])
             .expect("设置Prometheus桶失败");
             
-        let _handle = builder.install().expect("安装Prometheus导出器失败");
+        builder.install().expect("安装Prometheus导出器失败");
         
         // 注册核心企业级指标
         metrics::gauge!("grape_vector_db_queries_per_second")

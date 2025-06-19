@@ -457,8 +457,8 @@ impl FaissVectorIndex {
             for (i, vector) in self.vectors.iter().enumerate() {
                 let cluster = assignments[i];
                 cluster_counts[cluster] += 1;
-                for d in 0..dimension {
-                    new_centers[cluster][d] += vector[d];
+                for (d, &value) in vector.iter().enumerate().take(dimension) {
+                    new_centers[cluster][d] += value;
                 }
             }
             

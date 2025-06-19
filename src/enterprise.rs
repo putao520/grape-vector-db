@@ -177,7 +177,7 @@ impl ApiKey {
         let mut hasher = Sha256::new();
         hasher.update(uuid.as_bytes());
         hasher.update(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos().to_be_bytes());
-        format!("gvdb_{}", hex::encode(hasher.finalize())[..32].to_string())
+        format!("gvdb_{}", &hex::encode(hasher.finalize())[..32])
     }
 
     /// 检查密钥是否有效
@@ -532,6 +532,7 @@ impl AuthenticationManager {
     }
 
     /// 记录审计日志
+    #[allow(clippy::too_many_arguments)]
     pub fn log_audit_event(
         &self,
         user_id: Option<String>,

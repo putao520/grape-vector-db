@@ -14,7 +14,8 @@ use std::{
     time::{Duration, Instant},
     collections::HashMap,
 };
-use parking_lot::{RwLock, Mutex};
+use parking_lot::RwLock;
+use tokio::sync::Mutex;
 use tokio::runtime::Runtime;
 
 /// 数据库状态
@@ -337,8 +338,8 @@ impl EmbeddedVectorDB {
     }
     
     /// 获取数据库统计信息
-    pub fn stats(&self) -> DatabaseStats {
-        let storage_stats = self.storage.lock().get_stats();
+    pub async fn stats(&self) -> DatabaseStats {
+        let storage_stats = self.storage.lock().await.get_stats();
         
         DatabaseStats {
             total_vectors: storage_stats.estimated_keys as usize,
@@ -361,7 +362,17 @@ impl EmbeddedVectorDB {
         // 1. 检查存储引擎
         let storage_check = {
             let start = Instant::now();
-            let stats = storage.lock().get_stats();
+            let stats = match storage.try_lock() {
+                Ok(storage_guard) => storage_guard.get_stats(),
+                Err(_) => {
+                    // 如果锁被占用，返回一个基本的健康状态
+                    return HealthStatus {
+                        is_healthy: false,
+                        last_error: Some("Storage busy, health check degraded".to_string()),
+                        checks,
+                    };
+                }
+            };
             CheckResult {
                 name: "storage".to_string(),
                 status: CheckStatus::Healthy,
@@ -422,7 +433,10 @@ impl EmbeddedVectorDB {
         let start = Instant::now();
         
         // 1. 预热存储引擎缓存
-        self.storage.lock().warmup_cache().await?;
+        {
+            let storage = self.storage.lock().await;
+            storage.warmup_cache().await?;
+        }
         
         // 2. 预加载索引（如果存在）
         if self.config.enable_warmup {
@@ -459,12 +473,16 @@ impl EmbeddedVectorDB {
         // 执行向量搜索
         let results = if !request.vector.is_empty() {
             // 向量搜索 - 需要传递storage参数
-            let storage = self.storage.lock();
-            self.query_engine.vector_search(&*storage, &request.vector, request.limit).await?
+            let storage = self.storage.lock().await;
+            let search_result = self.query_engine.vector_search(&*storage, &request.vector, request.limit).await?;
+            drop(storage);
+            search_result
         } else if let Some(ref query_text) = request.query {
             // 文本搜索 (将转换为向量搜索)
-            let storage = self.storage.lock();
-            self.query_engine.text_search(&*storage, query_text, request.limit).await?
+            let storage = self.storage.lock().await;
+            let search_result = self.query_engine.text_search(&*storage, query_text, request.limit).await?;
+            drop(storage);
+            search_result
         } else {
             return Err(VectorDbError::Other("Either vector or query must be provided".into()));
         };
@@ -485,7 +503,10 @@ impl EmbeddedVectorDB {
     /// 异步插入
     async fn upsert_async(&self, points: Vec<Point>) -> Result<()> {
         // 批量存储向量
-        self.storage.lock().batch_store_vectors(points).await?;
+        {
+            let storage = self.storage.lock().await;
+            storage.batch_store_vectors(points).await?;
+        }
         Ok(())
     }
     
@@ -504,7 +525,11 @@ impl EmbeddedVectorDB {
                     if let Condition::Equals { field, value } = condition {
                         if field == "id" {
                             if let Some(id_str) = value.as_str() {
-                                if self.storage.lock().delete_document(id_str).await? {
+                                let deletion_result = {
+                                    let mut storage = self.storage.lock().await;
+                                    storage.delete_document(id_str).await?
+                                };
+                                if deletion_result {
                                     deleted_count += 1;
                                 }
                             }
@@ -518,7 +543,11 @@ impl EmbeddedVectorDB {
                     if let Condition::Equals { field, value } = condition {
                         if field == "id" {
                             if let Some(id_str) = value.as_str() {
-                                if self.storage.lock().delete_document(id_str).await? {
+                                let deletion_result = {
+                                    let mut storage = self.storage.lock().await;
+                                    storage.delete_document(id_str).await?
+                                };
+                                if deletion_result {
                                     deleted_count += 1;
                                 }
                             }
@@ -551,10 +580,16 @@ impl EmbeddedVectorDB {
         self.wait_for_operations().await?;
         
         // 2. 刷新缓存到磁盘
-        self.storage.lock().flush().await?;
+        {
+            let storage = self.storage.lock().await;
+            storage.flush().await?;
+        }
         
         // 3. 同步数据
-        self.storage.lock().sync().await?;
+        {
+            let storage = self.storage.lock().await;
+            storage.sync().await?;
+        }
         
         // 4. 导出最终指标
         if let Err(e) = self.metrics.export_final_stats() {

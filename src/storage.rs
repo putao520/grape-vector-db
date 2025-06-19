@@ -628,7 +628,7 @@ impl VectorStore for BasicVectorStore {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let temp_backup_path = path.with_extension(&format!("pre_restore_{}", backup_timestamp));
+        let temp_backup_path = path.with_extension(format!("pre_restore_{}", backup_timestamp));
         
         info!("创建恢复前备份: {:?}", temp_backup_path);
         if let Err(e) = self.backup(&temp_backup_path).await {

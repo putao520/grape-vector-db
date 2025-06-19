@@ -142,21 +142,14 @@ pub enum GeometryValue {
 
 /// Text search options
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TextSearchOptions {
     pub case_sensitive: bool,
     pub fuzzy: bool,
     pub max_distance: Option<usize>,
 }
 
-impl Default for TextSearchOptions {
-    fn default() -> Self {
-        Self {
-            case_sensitive: false,
-            fuzzy: false,
-            max_distance: None,
-        }
-    }
-}
+
 
 /// Filter index for efficient filtering
 #[derive(Debug)]
@@ -307,13 +300,13 @@ impl FilterIndex {
         match value {
             Value::String(s) => {
                 field_index.value_index.entry(s.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(id.to_string());
                 
                 // Text indexing (simple word-based)
                 for word in s.split_whitespace() {
                     field_index.text_index.entry(word.to_lowercase())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(id.to_string());
                 }
             }
@@ -324,7 +317,7 @@ impl FilterIndex {
             }
             Value::Bool(b) => {
                 field_index.value_index.entry(b.to_string())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(id.to_string());
             }
             _ => {}
@@ -725,6 +718,15 @@ impl SqlFilterParser {
             dialect: GenericDialect {},
         }
     }
+}
+
+impl Default for SqlFilterParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SqlFilterParser {
 
     /// Parse SQL WHERE clause into FilterExpression
     pub fn parse_where_clause(&self, sql: &str) -> Result<FilterExpression> {
@@ -735,7 +737,7 @@ impl SqlFilterParser {
                 if let Some(Statement::Query(query)) = statements.first() {
                     if let Some(selection) = &query.body.as_select().unwrap().selection {
                         // 解析WHERE条件并转换为FilterExpression
-                        self.convert_sql_expr_to_filter(selection)
+                        Self::convert_sql_expr_to_filter(selection)
                     } else {
                         Err(VectorDbError::other("No WHERE clause found"))
                     }
@@ -748,14 +750,14 @@ impl SqlFilterParser {
     }
     
     /// Convert SQL expression to FilterExpression
-    fn convert_sql_expr_to_filter(&self, expr: &sqlparser::ast::Expr) -> Result<FilterExpression> {
+    fn convert_sql_expr_to_filter(expr: &sqlparser::ast::Expr) -> Result<FilterExpression> {
         use sqlparser::ast::{Expr, BinaryOperator};
         
         match expr {
             Expr::BinaryOp { left, op, right } => {
                 match op {
                     BinaryOperator::Eq => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::Equal,
@@ -763,7 +765,7 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::NotEq => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::NotEqual,
@@ -771,7 +773,7 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::Lt => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::LessThan,
@@ -779,7 +781,7 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::LtEq => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::LessThanOrEqual,
@@ -787,7 +789,7 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::Gt => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::GreaterThan,
@@ -795,7 +797,7 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::GtEq => {
-                        let (field, value) = self.extract_field_value(left, right)?;
+                        let (field, value) = Self::extract_field_value(left, right)?;
                         Ok(FilterExpression::Comparison {
                             field,
                             operator: ComparisonOperator::GreaterThanOrEqual,
@@ -803,16 +805,16 @@ impl SqlFilterParser {
                         })
                     }
                     BinaryOperator::And => {
-                        let left_filter = self.convert_sql_expr_to_filter(left)?;
-                        let right_filter = self.convert_sql_expr_to_filter(right)?;
+                        let left_filter = Self::convert_sql_expr_to_filter(left)?;
+                        let right_filter = Self::convert_sql_expr_to_filter(right)?;
                         Ok(FilterExpression::Logical {
                             operator: LogicalOperator::And,
                             operands: vec![left_filter, right_filter],
                         })
                     }
                     BinaryOperator::Or => {
-                        let left_filter = self.convert_sql_expr_to_filter(left)?;
-                        let right_filter = self.convert_sql_expr_to_filter(right)?;
+                        let left_filter = Self::convert_sql_expr_to_filter(left)?;
+                        let right_filter = Self::convert_sql_expr_to_filter(right)?;
                         Ok(FilterExpression::Logical {
                             operator: LogicalOperator::Or,
                             operands: vec![left_filter, right_filter],
@@ -824,7 +826,7 @@ impl SqlFilterParser {
             Expr::UnaryOp { op, expr } => {
                 match op {
                     sqlparser::ast::UnaryOperator::Not => {
-                        let operand = self.convert_sql_expr_to_filter(expr)?;
+                        let operand = Self::convert_sql_expr_to_filter(expr)?;
                         Ok(FilterExpression::Logical {
                             operator: LogicalOperator::Not,
                             operands: vec![operand],
@@ -845,7 +847,7 @@ impl SqlFilterParser {
     }
     
     /// Extract field name and value from SQL binary expression
-    fn extract_field_value(&self, left: &sqlparser::ast::Expr, right: &sqlparser::ast::Expr) -> Result<(String, FilterValue)> {
+    fn extract_field_value(left: &sqlparser::ast::Expr, right: &sqlparser::ast::Expr) -> Result<(String, FilterValue)> {
         use sqlparser::ast::{Expr, Value};
         
         // 通常字段在左边，值在右边
@@ -871,7 +873,7 @@ impl SqlFilterParser {
             }
             // 也处理相反的情况（值在左边，字段在右边）
             (Expr::Value(_value), Expr::Identifier(_ident)) => {
-                self.extract_field_value(right, left)
+                Self::extract_field_value(right, left)
             }
             _ => {
                 Err(VectorDbError::other("Unable to extract field and value from SQL expression"))
@@ -902,6 +904,12 @@ impl FilterMetrics {
     }
 }
 
+impl Default for FilterMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,7 +933,6 @@ mod tests {
     #[test]
     fn test_sql_parser_creation() {
         let _parser = SqlFilterParser::new();
-        // 测试解析器创建成功
-        assert!(true);
+        // 测试解析器创建成功 - 无需断言，成功创建即可
     }
 } 

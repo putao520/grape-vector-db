@@ -415,8 +415,10 @@ mod tests {
     #[tokio::test]
     async fn test_query_engine() {
         let temp_dir = TempDir::new().unwrap();
-        let mut config = VectorDbConfig::default();
-        config.vector_dimension = 3; // Use smaller dimension for testing
+        let config = VectorDbConfig { 
+            vector_dimension: 3, // Use smaller dimension for testing
+            ..Default::default() 
+        };
         let metrics = Arc::new(MetricsCollector::new());
         
         let engine = QueryEngine::new(&config, metrics).unwrap();

@@ -1,8 +1,6 @@
-use chrono;
 use grape_vector_db::{errors::Result, Document, VectorDatabase, VectorDbConfig};
 use std::path::PathBuf;
 use std::time::Instant;
-use tokio;
 
 #[tokio::main]
 async fn main() -> Result<()> {

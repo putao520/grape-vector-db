@@ -686,7 +686,7 @@ impl ResilienceManager {
             let op = operation.clone();
             let tw = timeout_wrapper.clone();
             async move {
-                tw.execute(|| op()).await
+                tw.execute(op).await
                     .map_err(|e| format!("{:?}", e))
                     .and_then(|r| r.map_err(|e| e.to_string()))
             }

@@ -85,7 +85,7 @@ impl SparseIndex {
                 document_length: sparse_doc.document_length,
             };
 
-            inverted_index.entry(term_id).or_insert_with(Vec::new).push(entry);
+            inverted_index.entry(term_id).or_default().push(entry);
         }
 
         // 更新文档频率统计
@@ -345,7 +345,7 @@ impl SimpleTokenizer {
         }
 
         // 按索引排序
-        let mut pairs: Vec<_> = indices.into_iter().zip(values.into_iter()).collect();
+        let mut pairs: Vec<_> = indices.into_iter().zip(values).collect();
         pairs.sort_by_key(|&(idx, _)| idx);
         
         let (sorted_indices, sorted_values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
