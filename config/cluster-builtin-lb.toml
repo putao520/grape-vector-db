@@ -1,0 +1,90 @@
+# Grape Vector Database 集群配置示例
+# 展示如何配置内置负载均衡替代 nginx
+
+[cluster]
+# 集群基本配置
+name = "grape-cluster"
+max_nodes = 100
+heartbeat_interval_secs = 30
+election_timeout_secs = 10
+log_compaction_threshold = 1000
+
+[node]
+# 本地节点配置
+id = "node-primary"
+address = "127.0.0.1"
+port = 8080
+role = "Leader"
+
+[load_balancer]
+# 内置负载均衡配置
+enable = true
+strategy = "LoadBased"  # RoundRobin, WeightedRoundRobin, LeastConnections, LoadBased
+health_check_interval_secs = 30
+unhealthy_threshold_ms = 5000
+weight_update_interval_secs = 60
+max_retries = 3
+failover_timeout_ms = 1000
+
+[routing]
+# 请求路由配置
+enable_failover = true
+max_retries = 3
+request_timeout_ms = 5000
+connection_pool_size = 10
+enable_request_cache = true
+cache_ttl_secs = 300
+
+[service_discovery]
+# 服务发现配置
+enable_auto_discovery = true
+discovery_interval_secs = 60
+health_check_interval_secs = 30
+
+# 种子节点列表 (启动时连接的节点)
+seed_nodes = [
+    "127.0.0.1:8081",
+    "127.0.0.1:8082",
+    "127.0.0.1:8083"
+]
+
+[storage]
+# 存储配置
+path = "./data"
+cache_size_mb = 1024
+compression_enabled = true
+backup_interval_mins = 60
+
+[api]
+# API服务配置
+bind_address = "0.0.0.0"
+port = 8080
+max_connections = 1000
+request_timeout_secs = 30
+
+# 启用gRPC和REST API
+enable_grpc = true
+enable_rest = true
+grpc_port = 8090
+rest_port = 8080
+
+[metrics]
+# 监控和指标配置
+enable_prometheus = true
+prometheus_port = 9090
+metrics_interval_secs = 10
+
+[security]
+# 安全配置 (企业版)
+enable_auth = false
+tls_enabled = false
+# tls_cert_path = "/path/to/cert.pem"
+# tls_key_path = "/path/to/key.pem"
+
+[logging]
+# 日志配置
+level = "info"
+format = "json"
+file_path = "./logs/grape-vector-db.log"
+max_file_size_mb = 100
+max_files = 10

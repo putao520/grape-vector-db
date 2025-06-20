@@ -1061,7 +1061,7 @@ impl RaftNode {
         let mut log_entries: Vec<(u64, LogEntry)> = Vec::new();
         
         // 扫描所有以"raft_log_"开头的键
-        let log_prefix = b"raft_log_";
+        let _log_prefix = b"raft_log_";
         let mut last_log_index = 0u64;
         let mut recovered_count = 0;
         
@@ -1071,7 +1071,7 @@ impl RaftNode {
             let log_key = format!("raft_log_{:020}", log_index);
             
             // 尝试从存储中获取日志条目
-            if let Ok(Some(log_data)) = self.storage.get(&log_key).await {
+            if let Ok(Some(log_data)) = self.storage.get(log_key.as_bytes()) {
                 match bincode::deserialize::<LogEntry>(&log_data) {
                     Ok(log_entry) => {
                         log_entries.push((log_index, log_entry));
@@ -1098,27 +1098,30 @@ impl RaftNode {
         log_entries.sort_by_key(|(index, _)| *index);
         
         // 3. 重建内存中的日志数组
-        let mut logs = self.logs.write().await;
+        let mut logs = self.log.write().await;
         logs.clear();
         
         let mut expected_index = 1u64;
+        let mut last_log_info = None;
+        
         for (index, entry) in log_entries {
             if index != expected_index {
                 warn!("检测到日志间隙：期望索引 {}，实际索引 {}", expected_index, index);
                 // 在企业级实现中，这里可能需要触发日志修复或重新同步
             }
             
+            last_log_info = Some((index, entry.term));
             logs.push(entry);
             expected_index = index + 1;
         }
         
         // 4. 更新日志状态
-        if let Some((last_index, last_entry)) = log_entries.last() {
-            let mut state = self.persistent_state.write().await;
+        if let Some((last_index, last_term)) = last_log_info {
+            let current_term = *self.current_term.read().await;
             // 确保当前任期不低于日志中的任期
-            if last_entry.term > state.current_term {
-                warn!("日志中发现更高任期 {}，当前任期 {}", last_entry.term, state.current_term);
-                state.current_term = last_entry.term;
+            if last_term > current_term {
+                warn!("日志中发现更高任期 {}，当前任期 {}", last_term, current_term);
+                *self.current_term.write().await = last_term;
             }
             
             info!("日志恢复完成：恢复了 {} 条条目，最后索引 {}，耗时 {:?}", 
@@ -1135,7 +1138,7 @@ impl RaftNode {
     
     /// 验证日志一致性
     async fn verify_log_consistency(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let logs = self.logs.read().await;
+        let logs = self.log.read().await;
         
         if logs.is_empty() {
             return Ok(());
@@ -1391,7 +1394,7 @@ impl RaftNode {
             metadata: SnapshotMetadata {
                 version: 1,
                 created_at: chrono::Utc::now().timestamp(),
-                node_id: self.node_id.clone(),
+                node_id: self.config.node_id.clone(),
                 cluster_config: self.build_cluster_configuration().await,
             },
             applied_commands: Vec::new(),
@@ -1400,12 +1403,12 @@ impl RaftNode {
         
         // 1. 收集已应用的命令状态
         let last_applied = *self.last_applied.read().await;
-        let logs = self.logs.read().await;
+        let logs = self.log.read().await;
         
         let mut applied_count = 0;
         for i in 0..last_applied.min(logs.len() as u64) {
             let log_entry = &logs[i as usize];
-            if let LogEntryType::Command = log_entry.entry_type {
+            if let LogEntryType::Normal = log_entry.entry_type {
                 // 收集命令摘要信息（不是完整命令，以节省空间）
                 let command_summary = CommandSummary {
                     index: log_entry.index,
@@ -1438,10 +1441,10 @@ impl RaftNode {
         // 尝试反序列化命令以提取类型信息
         if let Ok(command) = bincode::deserialize::<VectorCommand>(data) {
             match command {
-                VectorCommand::Insert { .. } => "insert".to_string(),
+                VectorCommand::Upsert { .. } => "upsert".to_string(),
                 VectorCommand::Delete { .. } => "delete".to_string(),
-                VectorCommand::Update { .. } => "update".to_string(),
-                VectorCommand::CreateIndex { .. } => "create_index".to_string(),
+                VectorCommand::CreateShard { .. } => "create_shard".to_string(),
+                VectorCommand::DropShard { .. } => "drop_shard".to_string(),
             }
         } else {
             "unknown".to_string()
@@ -1449,28 +1452,15 @@ impl RaftNode {
     }
     
     /// 构建集群配置信息
-    async fn build_cluster_configuration(&self) -> Vec<ClusterNodeInfo> {
-        let peers = self.peers.read().await;
+    async fn build_cluster_configuration(&self) -> Vec<NodeId> {
         let mut cluster_config = Vec::new();
         
-        // 添加当前节点信息
-        cluster_config.push(ClusterNodeInfo {
-            node_id: self.node_id.clone(),
-            address: self.get_node_address(&self.node_id).await,
-            role: format!("{:?}", *self.role.read().await),
-            is_voting: true,
-            last_seen: chrono::Utc::now().timestamp(),
-        });
+        // 添加当前节点
+        cluster_config.push(self.config.node_id.clone());
         
-        // 添加对等节点信息
-        for (peer_id, peer_info) in peers.iter() {
-            cluster_config.push(ClusterNodeInfo {
-                node_id: peer_id.clone(),
-                address: peer_info.address.clone(),
-                role: "Follower".to_string(), // 从当前节点视角，其他都是Follower
-                is_voting: true,
-                last_seen: peer_info.last_heartbeat,
-            });
+        // 添加对等节点
+        for peer_id in &self.config.peers {
+            cluster_config.push(peer_id.clone());
         }
         
         cluster_config

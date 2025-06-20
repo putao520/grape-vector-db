@@ -115,7 +115,7 @@ pub struct BM25Stats {
 }
 
 /// 搜索请求
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchRequest {
     /// 查询向量
     pub vector: Vec<f32>,
@@ -130,7 +130,7 @@ pub struct SearchRequest {
 }
 
 /// 搜索响应
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResponse {
     /// 搜索结果
     pub results: Vec<SearchResult>,
@@ -152,7 +152,7 @@ pub struct GrpcSearchResponse {
 }
 
 /// 搜索参数
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchParams {
     /// 搜索精度参数
     pub ef: Option<usize>,
@@ -173,7 +173,7 @@ impl Default for SearchParams {
 }
 
 /// 过滤条件
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Filter {
     /// 必须匹配的条件
     Must(Vec<Condition>),
@@ -186,7 +186,7 @@ pub enum Filter {
 }
 
 /// 过滤条件
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Condition {
     /// 字段等于某个值
     Equals {
@@ -204,7 +204,7 @@ pub enum Condition {
 }
 
 /// 混合搜索请求
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HybridSearchRequest {
     /// 密集向量查询（可选）
     pub dense_vector: Option<Vec<f32>>,
@@ -633,6 +633,20 @@ pub struct NodeInfo {
     pub metadata: HashMap<String, String>,
     /// 节点负载
     pub load: NodeLoad,
+}
+
+impl Default for NodeInfo {
+    fn default() -> Self {
+        Self {
+            id: "node_0".to_string(),
+            address: "127.0.0.1".to_string(),
+            port: 8080,
+            state: NodeState::Healthy,
+            last_heartbeat: 0,
+            metadata: HashMap::new(),
+            load: NodeLoad::default(),
+        }
+    }
 }
 
 /// 节点状态
